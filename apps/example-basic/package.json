@@ -1,0 +1,17 @@
+{
+  "name": "@acp/example-basic",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"no tests\""
+  },
+  "dependencies": {
+    "@acp/config": "workspace:*",
+    "@acp/env": "workspace:*",
+    "@acp/gateway": "workspace:*",
+    "@acp/utils": "workspace:*",
+    "fastify": "^5.2.1"
+  }
+}
