@@ -1,26 +1,24 @@
 # agent-governance-gateway
 
-Agent Governance Gateway (ACP) is a TypeScript gateway runtime that sits between agents and external APIs/tools, turns each request into a canonical action, applies routing and policy decisions, supports human approvals, and emits auditable events.
+Agent Governance Gateway (ACP) is an HTTP governance layer for agent traffic. It normalizes requests, resolves principals, applies routing/policy decisions, supports approval workflows, and emits audit/telemetry.
 
-## Who This Is For
+## Why this exists
 
-- Platform engineers running agent workloads in production.
-- Security/compliance teams that need auditable control points.
-- AI application teams integrating LLM tools/APIs and needing safe guardrails.
+Teams ship agents quickly, then struggle with control:
+- risky actions are hard to gate,
+- approvals are ad-hoc,
+- audit trails are incomplete,
+- security asks for proof.
 
-## Why Teams Adopt ACP
+ACP gives one consistent control point.
 
-Before ACP:
-- Agent traffic goes directly to external APIs.
-- Access decisions are spread across app code.
-- Approvals are ad-hoc and hard to prove later.
+## Who should use it
 
-After ACP:
-- A single Gateway enforces routing rules and policy decisions.
-- Approval Tasks are explicit, traceable, and one-time consumable.
-- Audit events are emitted to sinks with security redaction by default.
+- Platform engineers running agents in production.
+- Security/compliance teams needing decision trails.
+- AI teams integrating external tools/APIs and wanting safe rollout.
 
-## Quickstart (Under 5 Minutes)
+## 5-minute quickstart
 
 ```bash
 pnpm install
@@ -28,49 +26,35 @@ cp .env.example .env
 pnpm dev:example
 ```
 
-The example runs three servers (gateway/upstream/approver) and an end-to-end client flow:
-1. Request gets `approval_required`.
-2. Mock approver decides `approved`.
-3. Client retries with `X-ACP-Approval-Task-Id` and succeeds.
-4. Second retry fails with `already_consumed`.
+You should see:
+- `approval_required` on first request,
+- success on retry with `x-acp-approval-task-id`,
+- `already_consumed` on second retry.
 
 Full walkthrough: [docs/quickstart.md](./docs/quickstart.md)
 
-## Core Concepts (Fast Summary)
+## Core headers
 
-- `Principal`: who initiated the action (`tenant`, `env`, `agentId`, etc.).
-- `Tool`: normalizes raw request into canonical target fields (`tool`, `action`, `resource`, `approvalBind`).
-- `Routing Rules`: first-match-wins rules for `passThrough`, `deny`, `requireApproval`, `enforcePolicy`.
-- `Approval Task`: pending/approved/denied/consumed lifecycle with one-time execution semantics.
-- `Audit Sink`: destination for structured audit events.
-- `OPA`: optional policy engine integration (disabled by default).
-- `OpenTelemetry`: optional traces/metrics integration (disabled by default).
+- `x-acp-upstream-url`
+- `x-acp-approval-task-id`
+- `x-idempotency-key` (recommended)
 
-## Security Defaults
+## Docs
 
-- Sensitive headers are redacted in canonical metadata used for audit/telemetry.
-- Request body is not logged by default.
-- Approval binding uses principal + method/host/path + optional `approvalBind`.
-- Internal `X-ACP-*` headers are not forwarded upstream.
-
-## Documentation
-
-### Start Here
 - [Docs Home](./docs/index.md)
-- [Why ACP Exists](./docs/why.md)
-- [Quickstart](./docs/quickstart.md)
-
-### Learn the Model
+- [Why ACP](./docs/why.md)
 - [Concepts](./docs/concepts.md)
+- [Quickstart](./docs/quickstart.md)
 - [Configuration](./docs/configuration.md)
-- [Plugins](./docs/plugins.md)
-
-### Operate Safely
+- [Principals](./docs/principals.md)
+- [Tools](./docs/tools.md)
+- [Routing](./docs/routing.md)
 - [Approvals](./docs/approvals.md)
-- [Security](./docs/security.md)
-- [Observability](./docs/observability.md)
-- [OPA Integration](./docs/opa.md)
-
-### Build Faster
+- [Proxying](./docs/proxying.md)
+- [Audit](./docs/audit.md)
+- [Observability (OTel)](./docs/observability.md)
+- [OPA](./docs/opa.md)
+- [Deployment (Local, Docker, Helm)](./docs/deployment.md)
 - [Recipes](./docs/recipes.md)
+- [Troubleshooting](./docs/troubleshooting.md)
 - [FAQ](./docs/faq.md)

@@ -1,19 +1,22 @@
-# OPA Integration
+# OPA
 
-OPA support is built in and optional. Keep it off until you need centralized policy logic.
+OPA integration is built in and disabled by default.
 
-## When To Enable OPA
+## When to use
 
-Enable OPA when:
-- You need policy logic that changes faster than code deploys.
-- You need a single policy language across services.
-- You need richer deny/approval decisions than static routing rules.
+Use OPA when static routing rules are not enough and you want centralized policy logic.
 
-## Gateway Behavior
+## How gateway calls OPA
 
-When route action is `enforcePolicy`, Gateway calls OPA HTTP API with input containing canonical action.
+When route action is `enforcePolicy`, gateway sends:
 
-Expected result shape:
+```json
+{ "input": <CanonicalAction> }
+```
+
+to configured `opa.url` using HTTP POST.
+
+Gateway expects response body:
 
 ```json
 {
@@ -24,27 +27,25 @@ Expected result shape:
 }
 ```
 
-`decision` can be:
+`decision` values:
 - `allow`
 - `deny`
 - `require_approval`
 
-## Enable OPA
+## Enable in config
 
 ```ts
 routing: {
   defaultAction: { type: "passThrough" },
-  rules: [
-    { match: { method: "POST" }, action: { type: "enforcePolicy" } },
-  ],
+  rules: [{ match: { method: "POST" }, action: { type: "enforcePolicy" } }],
 },
 opa: {
   enabled: true,
   url: "http://opa:8181/v1/data/acp/decision",
-},
+}
 ```
 
-## Example Rego Policy
+## Rego example
 
 ```rego
 package acp
@@ -65,13 +66,7 @@ decision = {"decision": "deny", "reason": "delete_blocked"} {
 }
 ```
 
-## Local Testing
-
-1. Start OPA with policy.
-2. Configure gateway `opa.enabled=true`.
-3. Send requests and verify allow/deny/approval outcomes.
-
-Example input test (direct OPA call):
+## Local test
 
 ```bash
 curl -X POST http://localhost:8181/v1/data/acp/decision \
@@ -79,8 +74,8 @@ curl -X POST http://localhost:8181/v1/data/acp/decision \
   -d '{"input":{"principal":{"env":"prod"},"request":{"method":"POST"}}}'
 ```
 
-## Practical Advice
+## Result mapping in gateway
 
-- Keep routing rules for broad shape control.
-- Use OPA for fine-grained policy branching.
-- Return clear `reason` values for operator understanding.
+- `allow` -> `passThrough`
+- `deny` -> `deny`
+- `require_approval` -> `requireApproval`

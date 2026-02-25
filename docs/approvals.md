@@ -1,83 +1,109 @@
 # Approvals
 
-Approvals are designed for controlled execution of risky requests.
+Approvals are triggered by routing rules (`requireApproval`) or OPA decision (`require_approval`).
 
-## Approval Task Basics
+## Lifecycle
 
-When a route requires approval, Gateway:
-1. Creates an `Approval Task` with `status: pending`.
-2. Calls configured Approval Handler.
-3. Returns `202` with:
-   - `status: "approval_required"`
-   - `approval_task_id`
-   - `poll_url`
+1. Gateway creates task (`pending`).
+2. Returns `202` with `approval_task_id` and `poll_url`.
+3. Approver posts decision to `/approvals/:id/decision`.
+4. Client retries original request with `x-acp-approval-task-id`.
+5. After successful upstream response, task is marked `consumed`.
 
-## One-Time Consume Rule
+## Endpoints
 
-Approved tasks are one-time executable:
-- First successful retry: task becomes `consumed`.
-- Second retry with same task id: `409 already_consumed`.
+- `GET /approvals/:id`
+- `POST /approvals/:id/decision`
 
-This prevents approval reuse.
+(If `basePath` is set, endpoints are prefixed.)
 
-## Binding Rules (Misuse Prevention)
+## Binding rules
 
-On task creation, binding fields are stored:
+Gateway binds approval to:
 - `principalKey`
 - `method`
 - `host`
 - `path`
 - optional `approvalBind`
 
-On retry, Gateway compares the same fields.
-If they differ, retry fails with `binding_mismatch`.
+No body hashing by default.
 
-## Polling and Decision Endpoints
+## Retry headers
 
-### Poll status
+- required: `x-acp-approval-task-id`
+- recommended: `x-idempotency-key`
+- also needed for execution: `x-acp-upstream-url`
 
-```bash
-curl -s http://localhost:3100/approvals/<TASK_ID>
-```
+## Example flow (curl)
 
-### Submit decision
-
-```bash
-curl -X POST http://localhost:3100/approvals/<TASK_ID>/decision \
-  -H 'content-type: application/json' \
-  -d '{"status":"approved","decidedBy":"ops","reason":"safe"}'
-```
-
-If `decisionSigningSecret` is configured, include signature header expected by your handler design.
-
-## Retry Request with Task ID
+### Request requiring approval
 
 ```bash
-curl -X POST http://localhost:3100/invoke \
-  -H 'X-ACP-Upstream-Url: http://localhost:3200/v1/chat/completions' \
-  -H 'X-ACP-Approval-Task-Id: <TASK_ID>' \
-  -H 'X-Idempotency-Key: req-123' \
+curl -i -X POST http://localhost:3100/invoke \
+  -H 'x-env: prod' \
+  -H 'x-agent-id: agent-demo' \
+  -H 'x-tenant-id: tenant-a' \
+  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
   -H 'content-type: application/json' \
   -d '{"prompt":"hello"}'
 ```
 
-## Recommended Idempotency Practice
+Expected `202`:
 
-Always send `X-Idempotency-Key` on retries.
-- It helps trace who consumed approval.
-- It helps downstream systems deduplicate request effects.
+```json
+{
+  "status": "approval_required",
+  "approval_task_id": "<id>",
+  "poll_url": "/approvals/<id>"
+}
+```
 
-## Common Failure Responses
+### Approve
 
-- `approval_not_found` (404)
-- `not_approved` (409)
-- `binding_mismatch` (409)
-- `already_consumed` (409)
+```bash
+curl -i -X POST http://localhost:3100/approvals/<id>/decision \
+  -H 'content-type: application/json' \
+  -d '{"status":"approved","decidedBy":"ops"}'
+```
 
-## Security Notes
+### Retry execute
 
-> **Warning**
-> Do not bind approval to raw body hash by default. Bodies often contain unstable/non-deterministic fields.
+```bash
+curl -i -X POST http://localhost:3100/invoke \
+  -H 'x-env: prod' \
+  -H 'x-agent-id: agent-demo' \
+  -H 'x-tenant-id: tenant-a' \
+  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-approval-task-id: <id>' \
+  -H 'x-idempotency-key: req-1' \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"hello"}'
+```
 
-> **Note**
-> Bind to stable fields (`principalKey`, `method`, `host`, `path`, optional `approvalBind`).
+### Retry again (expected `409`)
+
+```json
+{ "error": "already_consumed", "message": "approval task already consumed" }
+```
+
+### Binding mismatch (expected `409`)
+
+```json
+{ "error": "binding_mismatch", "message": "approval binding mismatch" }
+```
+
+## Signature verification (optional)
+
+If `decisionSigningSecret` is configured, gateway requires `x-acp-signature` for decision endpoint.
+
+> NOTE
+> Current gateway code builds `decisionUrl` as `http://localhost:<port>/...` inside approval handler payload.
+> This works in local/same-host setups. For remote approver systems, ensure they can reach that URL (or adapt deployment/networking accordingly).
+
+## Security notes
+
+> WARNING
+> Restrict who can call `/approvals/:id/decision`.
+
+> TIP
+> Always send `x-idempotency-key` on retry.

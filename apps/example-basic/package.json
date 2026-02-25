@@ -4,6 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:gateway": "tsx src/gateway-only.ts",
+    "dev:upstream": "tsx src/run-upstream.ts",
+    "dev:approver": "tsx src/run-approver.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "echo \"no tests\""
   },

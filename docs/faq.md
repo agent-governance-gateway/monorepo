@@ -1,47 +1,38 @@
 # FAQ
 
-## Isn’t this just an API gateway?
+## Is ACP just an API gateway?
 
-Not exactly. ACP is specifically designed for agent governance:
-- canonical action normalization
-- approval task lifecycle with one-time consume
-- principal-aware routing/policy
-- governance-grade audit events
+No. ACP focuses on agent governance: canonical actions, principal-aware routing, approval lifecycle, and audit events.
 
-## Why not just logs?
+## Do I need OPA?
 
-Logs alone do not enforce behavior. ACP both enforces controls and emits audit records.
+No. OPA is optional and disabled by default.
 
-## Do I have to use OPA or OpenTelemetry?
+## Do I need OpenTelemetry?
 
-No. Both are built in but disabled by default.
-- Use OPA when you need centralized policy decisions.
-- Use OTel when you need deep performance observability.
+No. OTel is optional and disabled by default.
 
-## How do you identify agents?
+## How are agents identified?
 
-Via Principal resolvers (plugin files in `principals/`). You can map headers/tokens/subdomain/context into `agentId`, `tenantId`, `env`, and more.
-
-## Can I use ACP with n8n / LangGraph / custom orchestrators?
-
-Yes. ACP is HTTP-based and can sit in front of any system that can send HTTP requests and headers.
+Via Principal resolvers (`principals/*.ts`) using headers, domain mapping, or custom logic.
 
 ## Does ACP store secrets?
 
-ACP does not need to store request secrets by default. It redacts sensitive headers in audit/telemetry metadata and avoids body logging by default.
+Not by default for request payloads. Sensitive headers are redacted in canonical metadata used for audit/telemetry.
 
-## How do retries work after approval?
+## Does ACP support MCP and egress today?
 
-Client retries the same request with:
-- `X-ACP-Approval-Task-Id`
-- recommended `X-Idempotency-Key`
+Not as runtime adapters yet. Types include channels (`http|mcp|egress`), but current request adapter sets `channel: "http"`.
 
-Gateway validates binding and approved status, executes once, then marks consumed.
+## Can I use ACP with n8n/LangGraph/custom orchestrators?
 
-## What happens if I retry again with same task id?
+Yes, if they can call HTTP endpoints and set headers.
 
-You get `409 already_consumed`.
+## Why both audit and OTel?
 
-## Can I run without Postgres?
+- Audit: governance/compliance trail.
+- OTel: performance and reliability signals.
 
-Yes for development/test paths: in-memory approval store is used when approvals runtime is not configured.
+## Can approval be reused?
+
+No. After successful execution, task is marked consumed and second use returns `already_consumed`.

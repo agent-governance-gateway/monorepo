@@ -1,48 +1,42 @@
-# Why ACP Exists
+# Why ACP
 
-ACP exists because most teams ship agent features faster than they can govern them.
+## Problem
 
-## The Core Pain
+Agent systems make many outbound calls quickly. Without a governance layer:
+- destructive calls can slip through,
+- approvals are manual and inconsistent,
+- logs are not enough for accountability,
+- security controls become app-by-app custom code.
 
-You launch an agent that calls APIs directly. It works in staging. Then production reality hits:
-- A prompt variation triggers an unintended destructive call.
-- You need human approval for high-risk actions, but there's no robust workflow.
-- Security asks for evidence of decisions and controls.
-- Logs contain too little context or too much sensitive data.
+## Outcome
 
-## Before / After
+ACP centralizes control with simple rules and plugins:
+- deny risky actions,
+- require approval for sensitive writes,
+- keep one-time approval execution,
+- emit structured audit events.
 
-### Before ACP
-- Every app implements custom checks differently.
-- No uniform model of action/principal/risk.
-- Approvals are manual and not tied to exact retry execution.
+## Before / after
 
-### After ACP
-- All requests pass through one Gateway decision point.
-- Requests are normalized to canonical actions.
-- Approvals are first-class (`Approval Task`) and one-time consumable.
-- Audit events are structured and redact sensitive headers by default.
+### Before
+- every app/team has different checks,
+- no stable principal/action model,
+- no reusable approval lifecycle.
 
-## Real-World Narrative
+### After
+- one Gateway path for decisions,
+- canonical action for routing/policy,
+- traceable approval and execution flow.
 
-You run a support agent that can read/write ticket systems.
-- Read requests can pass through.
-- Write requests in `prod` should require approval.
-- Deletion operations should be denied.
+## Who benefits
 
-With ACP, this becomes simple rules, not ad-hoc checks in multiple apps.
+- CTO/CISO: fast risk visibility and enforceable controls.
+- Platform teams: one governance layer for many agent apps.
+- Product teams: less security logic in business code.
 
-## When Not To Use ACP
+## When not to use
 
-ACP is likely overkill if:
-- You only have low-risk, internal, read-only automation.
-- You do not need approvals, policy, or audit traceability.
-- You can tolerate direct calls without a governance layer.
-
-## Decision Checklist
-
-Use ACP when at least one is true:
-- You need enforceable approval for risky actions.
-- You need an audit trail for governance/compliance.
-- You want centralized policy/routing logic.
-- You run agents across multiple teams/services and need consistency.
+ACP may be unnecessary if:
+- traffic is low-risk read-only,
+- no approval or audit requirements,
+- a direct integration is enough.

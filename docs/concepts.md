@@ -1,113 +1,67 @@
 # Concepts
 
-This page gives the mental model you need to reason about ACP quickly.
+## CanonicalAction
 
-## Canonical Model
-
-### Principal
-Represents who initiated the request.
-
-```ts
-type Principal = {
-  tenantId?: string;
-  env?: string;
-  agentId?: string;
-  serviceId?: string;
-  runId?: string;
-  workflowId?: string;
-  executionId?: string;
-  userId?: string;
-  tags?: Record<string, string>;
-};
-```
-
-### Tool
-A Tool detects/normalizes a raw request into consistent governance fields.
-
-```ts
-export default defineTool({
-  id: "openai",
-  match: (ctx) => ctx.host.includes("openai"),
-  normalize: (ctx) => ({
-    tool: "openai",
-    action: "chat.completions",
-    resource: ctx.host,
-    approvalBind: `openai:${ctx.method}:${ctx.host}:${ctx.path}`,
-  }),
-});
-```
-
-### CanonicalAction
-What Gateway uses for routing/policy/audit.
+Gateway converts incoming HTTP into a canonical structure used everywhere (routing, approvals, audit, OPA):
 
 ```ts
 type CanonicalAction = {
   principal: Principal;
   channel: "http" | "mcp" | "egress";
-  request: {
-    method: string;
-    host: string;
-    path: string;
-    contentType?: string;
-    bodySize?: number;
-  };
-  target: {
-    tool?: string;
-    action?: string;
-    resource?: string;
-    approvalBind?: string;
-  };
+  request: { method: string; host: string; path: string; contentType?: string; bodySize?: number };
+  target: { tool?: string; action?: string; resource?: string; approvalBind?: string };
 };
 ```
 
-## Routing Actions
+## Principal
 
-`Routing Rules` are evaluated top-to-bottom, first match wins.
+`Principal` identifies caller context (`tenantId`, `env`, `agentId`, `serviceId`, `workflowId`, `runId`, etc.).
+Resolved via `principals/*.ts` plugins.
 
-- `passThrough`: proxy to upstream.
-- `deny`: return denied response.
-- `requireApproval`: create Approval Task and return `approval_required`.
-- `enforcePolicy`: ask OPA, then map decision to allow/deny/approval.
+## Tool
 
-## Approval Lifecycle
+A Tool plugin does two jobs:
+1. `match(ctx)`
+2. `normalize(ctx, body)` -> `tool/action/resource/approvalBind`
+
+## Routing Rules
+
+First match wins.
+Actions:
+- `passThrough`
+- `deny`
+- `requireApproval`
+- `enforcePolicy` (OPA)
+
+## Approval Task lifecycle
 
 ```mermaid
 stateDiagram-v2
   [*] --> pending
-  pending --> approved: POST /approvals/:id/decision
-  pending --> denied: POST /approvals/:id/decision
-  approved --> consumed: retry with X-ACP-Approval-Task-Id + successful upstream
-  approved --> approved: polling
+  pending --> approved : POST /approvals/:id/decision
+  pending --> denied : POST /approvals/:id/decision
+  approved --> consumed : retry + successful upstream
   consumed --> [*]
   denied --> [*]
 ```
 
-## Audit vs OpenTelemetry
+## Channel coverage status
 
-Both are useful, but for different jobs:
+- HTTP: implemented.
+- MCP: planned (not implemented yet).
+- Egress: planned (not implemented yet).
 
-- `Audit`: decision trail and governance events (`request`, `approval_required`, `approval_decided`, `executed`, `error`).
-- `OpenTelemetry`: performance/operations (spans, counters, latency histograms).
+### Why this matters
 
-Use both in production:
-- Audit for accountability.
-- OTel for reliability and troubleshooting.
+`buildRequestContext` in gateway currently sets `channel: "http"`.
 
-## Minimal Runtime Diagram
+### Workaround today
 
-```mermaid
-flowchart TD
-  Req[Incoming Request] --> Principal[Resolve Principal]
-  Principal --> Tool[Normalize via Tool]
-  Tool --> Rules[Evaluate Routing Rules]
-  Rules -->|passThrough| Upstream[Proxy Upstream]
-  Rules -->|deny| Deny[Return Denied]
-  Rules -->|requireApproval| Task[Create Approval Task]
-  Task --> Approver[Approver decides]
-  Approver --> Retry[Client retry with X-ACP-Approval-Task-Id]
-  Retry --> Bind[Validate binding + approved state]
-  Bind --> Upstream
-  Upstream --> Audit[Emit Audit Event]
-  Rules --> OPA[Optional OPA decision]
-  Req --> OTel[Optional OTel spans/metrics]
-```
+Wrap MCP/Egress calls through HTTP clients and map context into headers (for principal resolution and routing).
+
+### Extension guide (where to implement)
+
+To add MCP/Egress adapters:
+1. Add adapter entrypoint before canonicalization.
+2. Build a `RequestContext` with `channel: "mcp"` or `"egress"`.
+3. Reuse existing normalization/routing/approval pipeline.

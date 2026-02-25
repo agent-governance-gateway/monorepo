@@ -1,23 +1,22 @@
-# Quickstart
+# Quickstart (Beginner-Friendly)
 
-This is the fastest way to see ACP’s approval workflow end-to-end.
+This walkthrough uses the real `apps/example-basic` app and takes under 10 minutes.
 
-## What You Will Run
+## What runs
 
-The example app starts three services:
-- Gateway (`:3100`)
-- Upstream mock (`:3200`)
-- Approver mock (`:3300`)
+- Gateway: `http://localhost:3100`
+- Upstream mock: `http://localhost:3200`
+- Approver mock: `http://localhost:3300`
 
 ```mermaid
 flowchart LR
-  Client --> Gateway[Gateway :3100]
-  Gateway --> Upstream[Upstream mock :3200]
-  Gateway --> Approver[Approver mock :3300]
+  Client --> Gateway
+  Gateway --> Upstream
+  Gateway --> Approver
   Approver --> Gateway
 ```
 
-## 1) Install and Start
+## 1) Install and run
 
 ```bash
 pnpm install
@@ -25,9 +24,9 @@ cp .env.example .env
 pnpm dev:example
 ```
 
-## 2) Observe the Expected Flow
+## 2) Expected console output
 
-You should see logs similar to:
+You should see lines like:
 
 ```text
 approval_required: { approval_task_id: "...", poll_url: "/approvals/..." }
@@ -35,23 +34,17 @@ retry status: 200 {"ok":true,...}
 second retry status: 409 {"error":"already_consumed",...}
 ```
 
-This confirms:
-1. Initial request required approval.
-2. Approver approved task.
-3. First retry with `X-ACP-Approval-Task-Id` executed.
-4. Second retry was blocked (one-time consume).
+## 3) What just happened
 
-## 3) Headers Used by ACP
+1. First POST matched `requireApproval` rule (`x-env: prod` in example).
+2. Gateway returned `202 approval_required`.
+3. Approver mock called decision endpoint and approved task.
+4. Client retried with `x-acp-approval-task-id`, upstream executed.
+5. Second retry failed (`already_consumed`).
 
-- `X-ACP-Upstream-Url`: required in MVP proxy mode.
-- `X-ACP-Approval-Task-Id`: required when retrying an approved task.
-- `X-Idempotency-Key`: recommended on retries.
+## 4) Manual curl flow (copy/paste)
 
-## 4) Manual API Walkthrough (Reference)
-
-If you run a Gateway process you can use these calls directly.
-
-### Step A: Request (approval expected)
+### A) Request (expect `202 approval_required`)
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
@@ -59,35 +52,36 @@ curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
   -H 'x-tenant-id: tenant-demo' \
-  -H 'X-ACP-Upstream-Url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
   -d '{"prompt":"hello"}'
 ```
 
-Expected response includes:
+Expected response body:
 
 ```json
 {
   "status": "approval_required",
-  "approval_task_id": "...",
-  "poll_url": "/approvals/..."
+  "approval_task_id": "<id>",
+  "poll_url": "/approvals/<id>",
+  "reason": "route requires approval"
 }
 ```
 
-### Step B: Poll task status
+### B) Poll status
 
 ```bash
-curl -s http://localhost:3100/approvals/<APPROVAL_TASK_ID>
+curl -s http://localhost:3100/approvals/<id>
 ```
 
-### Step C: Approve task (decision endpoint)
+### C) Approve task
 
 ```bash
-curl -i -X POST http://localhost:3100/approvals/<APPROVAL_TASK_ID>/decision \
+curl -i -X POST http://localhost:3100/approvals/<id>/decision \
   -H 'content-type: application/json' \
-  -d '{"status":"approved","decidedBy":"operator-1","reason":"approved"}'
+  -d '{"status":"approved","decidedBy":"operator-1","reason":"ok"}'
 ```
 
-### Step D: Retry with approval task id
+### D) Retry with approval task id (expect `200`)
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
@@ -95,13 +89,13 @@ curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
   -H 'x-tenant-id: tenant-demo' \
-  -H 'X-ACP-Upstream-Url: http://localhost:3200/v1/chat/completions' \
-  -H 'X-ACP-Approval-Task-Id: <APPROVAL_TASK_ID>' \
-  -H 'X-Idempotency-Key: req-001' \
+  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-approval-task-id: <id>' \
+  -H 'x-idempotency-key: req-1' \
   -d '{"prompt":"hello"}'
 ```
 
-### Step E: Retry again (should fail)
+### E) Retry same task again (expect `409 already_consumed`)
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
@@ -109,24 +103,76 @@ curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
   -H 'x-tenant-id: tenant-demo' \
-  -H 'X-ACP-Upstream-Url: http://localhost:3200/v1/chat/completions' \
-  -H 'X-ACP-Approval-Task-Id: <APPROVAL_TASK_ID>' \
-  -H 'X-Idempotency-Key: req-002' \
+  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-approval-task-id: <id>' \
+  -H 'x-idempotency-key: req-2' \
   -d '{"prompt":"hello"}'
 ```
 
-Expected: `409` + `already_consumed`.
+## 5) Additional expected errors
+
+### Denied rule (`403`)
+
+```bash
+curl -i -X DELETE http://localhost:3100/invoke \
+  -H 'x-acp-upstream-url: http://localhost:3200/delete'
+```
+
+Expected error:
+
+```json
+{ "error": "denied", "reason": "delete_is_forbidden" }
+```
+
+### Binding mismatch (`409`)
+
+Use same approved task id but change path/method/host/principal.
+
+Expected error:
+
+```json
+{ "error": "binding_mismatch", "message": "approval binding mismatch" }
+```
+
+## 6) TypeScript client example
+
+```ts
+const first = await fetch("http://localhost:3100/invoke", {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "x-env": "prod",
+    "x-agent-id": "agent-demo",
+    "x-tenant-id": "tenant-demo",
+    "x-acp-upstream-url": "http://localhost:3200/v1/chat/completions",
+  },
+  body: JSON.stringify({ prompt: "hello" }),
+});
+
+const approval = await first.json();
+
+const retry = await fetch("http://localhost:3100/invoke", {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "x-env": "prod",
+    "x-agent-id": "agent-demo",
+    "x-tenant-id": "tenant-demo",
+    "x-acp-upstream-url": "http://localhost:3200/v1/chat/completions",
+    "x-acp-approval-task-id": approval.approval_task_id,
+    "x-idempotency-key": "req-100",
+  },
+  body: JSON.stringify({ prompt: "hello" }),
+});
+```
 
 ## Troubleshooting
 
-### `pnpm: command not found`
-Install pnpm and retry.
-
-### DB connection errors
-If `APPROVALS_DB_URL` is unset, example uses in-memory approvals store.
-
-### Approval never becomes approved
-Check `APPROVER_WEBHOOK_URL` in `.env` and ensure approver mock is running.
-
 ### `missing_upstream`
-Always send `X-ACP-Upstream-Url` in MVP proxy mode.
+You must send `x-acp-upstream-url`.
+
+### Task stays `pending`
+Check approver connectivity and decision endpoint calls.
+
+### DB errors
+If `APPROVALS_DB_URL` is unset, example uses in-memory approval store.
