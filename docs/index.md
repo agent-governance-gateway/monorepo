@@ -78,4 +78,5 @@ flowchart LR
 ```
 
 > NOTE
-> Current runtime channel implementation is HTTP only. MCP/Egress are modeled in types but not implemented in adapters yet.
+> Gateway supports `http` and a basic MCP-over-HTTP entrypoint (`POST /mcp`, `POST /mcp/*`).
+> `egress` channel adapters are still not implemented.

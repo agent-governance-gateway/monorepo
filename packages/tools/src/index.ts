@@ -15,6 +15,20 @@ export const genericHttpTool: ToolPack = {
   }),
 };
 
+export const genericMcpTool: ToolPack = {
+  id: "generic-mcp",
+  match: (ctx) => ctx.channel === "mcp",
+  normalize: (ctx) => {
+    const action = ctx.path.startsWith("/mcp/") ? ctx.path.slice("/mcp/".length) : "unknown";
+    return {
+      tool: "mcp",
+      action: action || "unknown",
+      resource: ctx.host,
+      approvalBind: `mcp:${ctx.host}:${action || "unknown"}`,
+    };
+  },
+};
+
 function extractOpenAIAction(path: string): string {
   if (path.includes("/chat/completions")) {
     return "chat.completions";
@@ -41,6 +55,6 @@ export const openaiLikeTool: ToolPack = {
   }),
 };
 
-export const builtInTools: ToolPack[] = [openaiLikeTool, genericHttpTool];
+export const builtInTools: ToolPack[] = [genericMcpTool, openaiLikeTool, genericHttpTool];
 
 export type { ToolPack } from "@acp/core";

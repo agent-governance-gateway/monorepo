@@ -35,6 +35,17 @@ export function buildRequestContext(req: FastifyRequest): RequestContext {
   };
 }
 
+export function buildMcpRequestContext(req: FastifyRequest): RequestContext {
+  const base = buildRequestContext(req);
+  const mcpMethod = extractMcpMethod(req.body);
+  return {
+    ...base,
+    channel: "mcp",
+    method: "POST",
+    path: mcpMethod ? `/mcp/${mcpMethod}` : "/mcp/unknown",
+  };
+}
+
 export function chooseTool(tools: ToolPack[], ctx: RequestContext): ToolPack {
   for (const tool of tools) {
     if (tool.match(ctx)) {
@@ -76,4 +87,12 @@ export async function resolvePrincipal(resolvers: PrincipalResolver[], ctx: Requ
     }
   }
   return principal;
+}
+
+function extractMcpMethod(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") {
+    return undefined;
+  }
+  const method = (body as Record<string, unknown>).method;
+  return typeof method === "string" && method.trim().length > 0 ? method : undefined;
 }

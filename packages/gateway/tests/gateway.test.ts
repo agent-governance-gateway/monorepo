@@ -81,6 +81,41 @@ describe("gateway", () => {
     expect(action).toEqual({ type: "deny", reason: "first" });
   });
 
+  it("routes /mcp requests with channel=mcp", async () => {
+    const pluginsDir = await makeTempPlugins({
+      "tools/default.ts": "export default defineTool({id:'t',match:()=>true,normalize:()=>({tool:'t',action:'x',resource:'r'})});",
+      "principals/default.ts": "export default definePrincipalResolver({id:'p',resolve:()=>({env:'dev',agentId:'a1',tenantId:'t1'})});",
+      "approvals/noop.ts": "export default defineApprovalHandler({id:'noop',request:async()=>{}});",
+      "sinks/file.ts": "export default defineSink({id:'file',write:async()=>{}});",
+    });
+
+    const upstream = await startUpstream();
+    cleanups.push(upstream.close);
+
+    const cfg = baseConfig(0);
+    cfg.routing.rules = [{ match: { channel: "mcp" }, action: { type: "deny", reason: "mcp_disabled" } }];
+    const gw = await createGateway(cfg, { cwd: pluginsDir });
+    await gw.app.listen({ port: 0, host: "127.0.0.1" });
+    const addr = gw.app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+    cleanups.push(async () => gw.stop());
+
+    const res = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        "x-acp-upstream-url": upstream.url,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "1", method: "tools/call", params: {} }),
+    });
+
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toBe("denied");
+    expect(body.reason).toBe("mcp_disabled");
+  });
+
   it("approval lifecycle and second consume rejection", async () => {
     const pluginsDir = await makeTempPlugins({
       "tools/default.ts": "export default defineTool({id:'t',match:()=>true,normalize:(ctx)=>({tool:'t',approvalBind:`b:${ctx.method}:${ctx.path}`})});",
@@ -242,5 +277,36 @@ describe("gateway", () => {
     expect(executed.outcome.cost.amount).toBe(0.1234);
     expect(executed.outcome.costReason).toBe("token_pricing");
     expect(executed.outcome.metadata.tokens).toBe(42);
+  });
+
+  it("rejects request when tool upstream and header upstream mismatch", async () => {
+    const pluginsDir = await makeTempPlugins({
+      "tools/locked.ts": `
+        export default defineTool({
+          id:'locked',
+          match:()=>true,
+          resolveUpstream:()=> 'https://example.com/fixed',
+          normalize:(ctx)=>({tool:'locked',action:'run',resource:ctx.host}),
+        });
+      `,
+      "principals/default.ts": "export default definePrincipalResolver({id:'p',resolve:()=>({env:'dev',agentId:'a1',tenantId:'t1'})});",
+      "approvals/noop.ts": "export default defineApprovalHandler({id:'noop',request:async()=>{}});",
+      "sinks/file.ts": "export default defineSink({id:'file',write:async()=>{}});",
+    });
+
+    const gw = await createGateway(baseConfig(0), { cwd: pluginsDir });
+    await gw.app.listen({ port: 0, host: "127.0.0.1" });
+    const addr = gw.app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+    cleanups.push(async () => gw.stop());
+
+    const res = await fetch(`${base}/invoke`, {
+      method: "GET",
+      headers: { "x-acp-upstream-url": "https://evil.example/not-allowed" },
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toBe("upstream_not_allowed");
   });
 });

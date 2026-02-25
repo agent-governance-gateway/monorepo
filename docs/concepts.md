@@ -48,16 +48,19 @@ stateDiagram-v2
 ## Channel coverage status
 
 - HTTP: implemented.
-- MCP: planned (not implemented yet).
+- MCP: implemented via MCP-over-HTTP adapter (`POST /mcp` and `POST /mcp/*`).
 - Egress: planned (not implemented yet).
 
-### Why this matters
+### MCP adapter behavior
 
-`buildRequestContext` in gateway currently sets `channel: "http"`.
-
-### Workaround today
-
-Wrap MCP/Egress calls through HTTP clients and map context into headers (for principal resolution and routing).
+Gateway builds `channel: "mcp"` context and derives path from JSON-RPC method:
+- input: `{ "method": "tools/call" }`
+- canonical request path: `/mcp/tools/call`
+- built-in MCP tool normalizes to:
+  - `tool: "mcp"`
+  - `action: "tools/call"`
+  - `resource: <host>`
+  - `approvalBind: mcp:<host>:tools/call`
 
 ### Extension guide (where to implement)
 

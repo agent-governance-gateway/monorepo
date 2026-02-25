@@ -69,6 +69,7 @@ Then run the no-mocks approval flow from [docs/quickstart.md](./docs/quickstart.
 - `Principals`: caller identity and attribution fields.
 - `Tools`: normalization of raw HTTP to canonical target.
 - `Routing Rules`: ordered deterministic actions.
+- `Channels`: HTTP and MCP-over-HTTP (`/mcp`).
 - `Approval Task`: pending/approved/denied/consumed lifecycle.
 - `Audit Sink`: where audit events are written.
 - `OPA`: optional external policy engine.
@@ -84,6 +85,7 @@ Then run the no-mocks approval flow from [docs/quickstart.md](./docs/quickstart.
 
 - No body logging by default.
 - Sensitive headers are redacted (`authorization`, `cookie`, etc.).
+- Tools can pin upstream target via `resolveUpstream` to prevent header-based upstream abuse.
 - Approval binding is based on principal + method/host/path + optional `approvalBind`.
 - Approval tasks are consumed only after successful upstream response.
 

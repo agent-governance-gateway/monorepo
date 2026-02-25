@@ -1,18 +1,20 @@
-# Proxying (HTTP)
+# Proxying
 
-ACP currently proxies HTTP requests using a target URL header.
-
-## Required header
-
+ACP forwards requests to real upstream targets using:
 - `x-acp-upstream-url`
 
-If missing, gateway returns:
+For tool packs that define `resolveUpstream`, gateway uses tool-defined upstream instead of trusting header value.
+If header is present but does not match tool upstream, gateway returns `403 upstream_not_allowed`.
+
+If missing:
 
 ```json
 { "error": "missing_upstream", "message": "X-ACP-Upstream-Url header is required" }
 ```
 
-## Pass-through example
+## HTTP endpoint
+
+Use any HTTP path (example: `/invoke`):
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
@@ -21,40 +23,28 @@ curl -i -X POST http://localhost:3100/invoke \
   -d '{"prompt":"hello"}'
 ```
 
-## Approval + retry example
+## MCP endpoint
 
-First call (approval required by route):
+Use MCP-over-HTTP endpoints:
+- `POST /mcp`
+- `POST /mcp/*`
 
-```bash
-curl -i -X POST http://localhost:3100/invoke \
-  -H 'x-env: prod' \
-  -H 'x-agent-id: agent-demo' \
-  -H 'x-acp-upstream-url: https://httpbin.org/post' \
-  -H 'content-type: application/json' \
-  -d '{"prompt":"hello"}'
-```
-
-Retry after manual approval:
+Example:
 
 ```bash
-curl -i -X POST http://localhost:3100/invoke \
-  -H 'x-env: prod' \
-  -H 'x-agent-id: agent-demo' \
+curl -i -X POST http://localhost:3100/mcp \
   -H 'x-acp-upstream-url: https://httpbin.org/post' \
-  -H 'x-acp-approval-task-id: <id>' \
-  -H 'x-idempotency-key: req-1' \
   -H 'content-type: application/json' \
-  -d '{"prompt":"hello"}'
+  -d '{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"search","arguments":{"q":"hello"}}}'
 ```
+
+Gateway treats this as `channel: "mcp"` and applies the same principal/routing/approval/audit pipeline.
 
 ## Header forwarding behavior
 
-Gateway strips internal headers before upstream call:
+Gateway strips before upstream call:
 - all `x-acp-*`
 - `host`
 - `content-length`
 
 Other string headers are forwarded.
-
-> NOTE
-> HTTP header names are case-insensitive, but examples here use lowercase to match internal constants.

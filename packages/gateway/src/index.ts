@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import crypto from "node:crypto";
 import { installGlobals, type ConfigFactory } from "@acp/config";
 import {
@@ -29,7 +29,14 @@ import {
 } from "./internal/approval.js";
 import { loadDefaultExports, loadPlugins, type LoadedPlugins } from "./internal/plugins.js";
 import { proxyUpstream } from "./internal/proxy.js";
-import { buildCanonical, buildRequestContext, chooseTool, getBodyBuffer, resolvePrincipal } from "./internal/request.js";
+import {
+  buildCanonical,
+  buildMcpRequestContext,
+  buildRequestContext,
+  chooseTool,
+  getBodyBuffer,
+  resolvePrincipal,
+} from "./internal/request.js";
 import { matchRule, pickRouteAction } from "./internal/routing.js";
 
 export type GatewayRuntime = {
@@ -163,16 +170,16 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
     }
   });
 
-  app.all(route("/*"), async (req, reply) => {
+  const handleProxyRequest = async (req: FastifyRequest, reply: FastifyReply, ctx: RequestContext) => {
     const requestSpan = telemetry.startSpan("acp.request");
     const requestId = crypto.randomUUID();
     const body = getBodyBuffer(req);
-    const ctx = buildRequestContext(req);
     const principal = await resolvePrincipal(plugins.principals, ctx);
     telemetry.annotatePrincipal(requestSpan, principal);
 
     const tool = chooseTool(plugins.tools, ctx);
     const canonical = buildCanonical(ctx, principal, tool.normalize(ctx, body), body);
+    const upstreamUrl = resolveUpstreamUrl(tool, ctx, body, req);
     await persistRequestRecord(sharedDb, requestId, canonical);
 
     const requestEvent: AuditEvent = {
@@ -203,7 +210,7 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
           throw new ACPError("binding_mismatch", "approval binding mismatch", 409);
         }
 
-        const result = await executeUpstreamWithToolMeta(tool, ctx, canonical, body, req, reply);
+        const result = await executeUpstreamWithToolMeta(tool, ctx, canonical, body, req, reply, upstreamUrl);
         telemetry.recordLatency("acp.upstream.latency_ms", result.upstream.latencyMs);
         if (isSuccessStatus(result.upstream.status)) {
           await approvalStore.markConsumed(
@@ -309,7 +316,7 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
       }
 
       const upstreamSpan = telemetry.startSpan("acp.upstream");
-      const result = await executeUpstreamWithToolMeta(tool, ctx, canonical, body, req, reply);
+      const result = await executeUpstreamWithToolMeta(tool, ctx, canonical, body, req, reply, upstreamUrl);
       upstreamSpan.end();
 
       telemetry.recordLatency("acp.upstream.latency_ms", result.upstream.latencyMs);
@@ -347,6 +354,21 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
     } finally {
       requestSpan.end();
     }
+  };
+
+  app.post(route("/mcp"), async (req, reply) => {
+    const ctx = buildMcpRequestContext(req);
+    return handleProxyRequest(req, reply, ctx);
+  });
+
+  app.post(route("/mcp/*"), async (req, reply) => {
+    const ctx = buildMcpRequestContext(req);
+    return handleProxyRequest(req, reply, ctx);
+  });
+
+  app.all(route("/*"), async (req, reply) => {
+    const ctx = buildRequestContext(req);
+    return handleProxyRequest(req, reply, ctx);
   });
 
   return {
@@ -472,8 +494,9 @@ async function executeUpstreamWithToolMeta(
   body: Buffer,
   req: Parameters<typeof proxyUpstream>[0],
   reply: Parameters<typeof proxyUpstream>[1],
+  upstreamUrl: string,
 ): Promise<{ upstream: Awaited<ReturnType<typeof proxyUpstream>>; meta: ToolAfterRequestMeta }> {
-  const upstream = await proxyUpstream(req, reply, body);
+  const upstream = await proxyUpstream(req, reply, body, upstreamUrl);
   const meta = await runAfterRequest(tool, {
     ctx,
     canonical,
@@ -486,6 +509,36 @@ async function executeUpstreamWithToolMeta(
     },
   });
   return { upstream, meta };
+}
+
+function resolveUpstreamUrl(
+  tool: ToolPack,
+  ctx: RequestContext,
+  body: Buffer,
+  req: FastifyRequest,
+): string {
+  const toolUpstream = tool.resolveUpstream?.(ctx, body);
+  const headerUpstream = typeof req.headers[INTERNAL_HEADERS.UPSTREAM_URL] === "string"
+    ? (req.headers[INTERNAL_HEADERS.UPSTREAM_URL] as string)
+    : undefined;
+
+  if (toolUpstream) {
+    if (headerUpstream && headerUpstream !== toolUpstream) {
+      throw new ACPError(
+        "upstream_not_allowed",
+        "x-acp-upstream-url does not match tool upstream",
+        403,
+        { expected: toolUpstream },
+      );
+    }
+    return toolUpstream;
+  }
+
+  if (headerUpstream) {
+    return headerUpstream;
+  }
+
+  throw new ACPError("missing_upstream", "X-ACP-Upstream-Url header is required", 400);
 }
 
 async function persistCostEvent(

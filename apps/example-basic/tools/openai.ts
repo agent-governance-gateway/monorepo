@@ -3,6 +3,7 @@
 export default defineTool({
   id: "openai",
   match: (ctx) => ctx.path.includes("/v1/") || ctx.host.includes("openai"),
+  resolveUpstream: (ctx) => `https://api.openai.com${ctx.path}`,
   normalize: (ctx) => ({
     tool: "openai",
     action: ctx.path.includes("chat/completions") ? "chat.completions" : "unknown",

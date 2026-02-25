@@ -1,12 +1,12 @@
-import { ACPError, INTERNAL_HEADERS } from "@acp/core";
+import { ACPError } from "@acp/core";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 export async function proxyUpstream(
   req: FastifyRequest,
   reply: FastifyReply,
   body: Buffer,
+  upstreamUrl: string,
 ): Promise<{ status: number; latencyMs: number; headers: Record<string, string>; body: Buffer }> {
-  const upstreamUrl = req.headers[INTERNAL_HEADERS.UPSTREAM_URL] as string | undefined;
   if (!upstreamUrl) {
     throw new ACPError("missing_upstream", "X-ACP-Upstream-Url header is required", 400);
   }

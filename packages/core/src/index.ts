@@ -70,6 +70,7 @@ export type JsonObject = { [key: string]: JsonValue };
 export type ToolPack = {
   id: string;
   match(ctx: RequestContext): boolean;
+  resolveUpstream?: (ctx: RequestContext, body?: Buffer) => string | undefined;
   normalize(ctx: RequestContext, body?: Buffer): Partial<{
     tool: string;
     action: string;
