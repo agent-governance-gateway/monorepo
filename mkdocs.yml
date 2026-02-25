@@ -1,0 +1,56 @@
+site_name: Agent Governance Gateway Docs
+site_description: Documentation for ACP (Agent Governance Gateway)
+site_url: ""
+docs_dir: docs
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.follow
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+nav:
+  - Home: index.md
+  - Tutorials:
+      - Quickstart: tutorials/quickstart.md
+      - Approvals End-to-End: tutorials/approvals-end-to-end.md
+  - How-to:
+      - Audit-only mode: how-to/audit-only.md
+      - Block DELETE globally: how-to/block-delete.md
+      - Allow all except specific patterns: how-to/allow-except.md
+      - Require approvals for prod writes: how-to/prod-approvals.md
+      - Principals from headers: how-to/principals-headers.md
+      - Principals from domain/subdomain: how-to/principals-domain.md
+      - Create a tool pack: how-to/tools-create.md
+      - Enable OPA policy checks: how-to/opa-enable.md
+      - Enable OpenTelemetry: how-to/otel-enable.md
+      - Run with Docker: how-to/docker-run.md
+      - Deploy with Helm: how-to/helm-deploy.md
+  - Reference:
+      - Configuration: reference/configuration.md
+      - Headers: reference/headers.md
+      - Endpoints: reference/endpoints.md
+      - Plugin interfaces: reference/plugins.md
+      - Audit events: reference/audit-events.md
+      - OpenTelemetry spans and metrics: reference/otel-spans-metrics.md
+      - OPA contract: reference/opa-contract.md
+  - Explanation:
+      - Why ACP: explanation/why.md
+      - Concepts: explanation/concepts.md
+      - Architecture: explanation/architecture.md
+      - Security model: explanation/security-model.md
+      - Trade-offs: explanation/tradeoffs.md
+  - Recipes:
+      - Cookbook: recipes/cookbook.md
+  - Operations:
+      - Troubleshooting: troubleshooting.md
+      - FAQ: faq.md

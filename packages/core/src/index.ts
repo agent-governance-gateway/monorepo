@@ -69,7 +69,7 @@ export type JsonObject = { [key: string]: JsonValue };
 
 export type ToolPack = {
   id: string;
-  match(ctx: RequestContext): boolean;
+  match?: (ctx: RequestContext) => boolean;
   resolveUpstream?: (ctx: RequestContext, body?: Buffer) => string | undefined;
   normalize(ctx: RequestContext, body?: Buffer): Partial<{
     tool: string;
@@ -230,6 +230,7 @@ export class ACPError extends Error {
 export const INTERNAL_HEADERS = {
   APPROVAL_TASK_ID: "x-acp-approval-task-id",
   UPSTREAM_URL: "x-acp-upstream-url",
+  TOOL_ID: "x-acp-tool-id",
 } as const;
 
 export const REDACTED_HEADERS = new Set([

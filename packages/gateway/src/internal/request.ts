@@ -1,4 +1,5 @@
 import {
+  INTERNAL_HEADERS,
   REDACTED_HEADERS,
   type CanonicalAction,
   type Principal,
@@ -47,8 +48,20 @@ export function buildMcpRequestContext(req: FastifyRequest): RequestContext {
 }
 
 export function chooseTool(tools: ToolPack[], ctx: RequestContext): ToolPack {
+  const requestedToolId = typeof ctx.headers[INTERNAL_HEADERS.TOOL_ID] === "string"
+    ? (ctx.headers[INTERNAL_HEADERS.TOOL_ID] as string)
+    : undefined;
+
+  if (requestedToolId) {
+    for (const tool of tools) {
+      if (!tool.match && tool.id === requestedToolId) {
+        return tool;
+      }
+    }
+  }
+
   for (const tool of tools) {
-    if (tool.match(ctx)) {
+    if (tool.match?.(ctx)) {
       return tool;
     }
   }

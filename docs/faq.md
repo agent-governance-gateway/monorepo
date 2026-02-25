@@ -2,37 +2,40 @@
 
 ## Is ACP just an API gateway?
 
-No. ACP focuses on agent governance: canonical actions, principal-aware routing, approval lifecycle, and audit events.
+No. ACP is a governance gateway focused on principal resolution, routing decisions, approvals, and audit attribution for agent actions.
 
-## Do I need OPA?
+## Do I have to use OPA?
 
 No. OPA is optional and disabled by default.
 
-## Do I need OpenTelemetry?
+## Do I have to use OpenTelemetry?
 
-No. OTel is optional and disabled by default.
+No. OpenTelemetry is optional and disabled by default.
 
-## How are agents identified?
+## Do I always need `x-acp-upstream-url`?
 
-Via Principal resolvers (`principals/*.ts`) using headers, domain mapping, or custom logic.
+No. If the matched tool defines `resolveUpstream`, gateway uses that and header is optional.
+You need `x-acp-upstream-url` only for tools without pinned upstream.
+
+## What is `x-acp-tool-id` for?
+
+It selects a tool by id when that tool does not define `match`.
+Example: `x-acp-tool-id: demo-httpbin`.
+
+## How are principals identified?
+
+Through resolver plugins. You can use headers, domain/subdomain patterns, API keys, or combinations.
 
 ## Does ACP store secrets?
 
-Not by default for request payloads. Sensitive headers are redacted in canonical metadata used for audit/telemetry.
+ACP redacts sensitive headers in canonical metadata and does not log request body by default.
 
-## Does ACP support MCP and egress today?
+## Is MCP supported?
 
-Not as runtime adapters yet. Types include channels (`http|mcp|egress`), but current request adapter sets `channel: "http"`.
+MCP-over-HTTP routes are supported at `POST /mcp` and `POST /mcp/*`.
+Native egress channel adapters are not supported yet.
 
-## Can I use ACP with n8n/LangGraph/custom orchestrators?
+## Next steps
 
-Yes, if they can call HTTP endpoints and set headers.
-
-## Why both audit and OTel?
-
-- Audit: governance/compliance trail.
-- OTel: performance and reliability signals.
-
-## Can approval be reused?
-
-No. After successful execution, task is marked consumed and second use returns `already_consumed`.
+- [Concepts](./explanation/concepts.md)
+- [Quickstart](./tutorials/quickstart.md)

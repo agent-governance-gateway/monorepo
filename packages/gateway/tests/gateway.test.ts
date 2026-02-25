@@ -279,6 +279,40 @@ describe("gateway", () => {
     expect(executed.outcome.metadata.tokens).toBe(42);
   });
 
+  it("selects tool by x-acp-tool-id when tool has no match", async () => {
+    const upstream = await startUpstream();
+    cleanups.push(upstream.close);
+
+    const pluginsDir = await makeTempPlugins({
+      "tools/id-only.ts": `
+        export default defineTool({
+          id:'id-only',
+          resolveUpstream:()=> '${upstream.url}',
+          normalize:()=>({tool:'id-only',action:'run',resource:'demo'}),
+        });
+      `,
+      "principals/default.ts": "export default definePrincipalResolver({id:'p',resolve:()=>({env:'dev',agentId:'a1',tenantId:'t1'})});",
+      "approvals/noop.ts": "export default defineApprovalHandler({id:'noop',request:async()=>{}});",
+      "sinks/file.ts": "export default defineSink({id:'file',write:async()=>{}});",
+    });
+
+    const gw = await createGateway(baseConfig(0), { cwd: pluginsDir });
+    await gw.app.listen({ port: 0, host: "127.0.0.1" });
+    const addr = gw.app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+    cleanups.push(async () => gw.stop());
+
+    const withoutId = await fetch(`${base}/invoke`, { method: "GET" });
+    expect(withoutId.status).toBe(400);
+
+    const withId = await fetch(`${base}/invoke`, {
+      method: "GET",
+      headers: { "x-acp-tool-id": "id-only" },
+    });
+    expect(withId.status).toBe(200);
+  });
+
   it("rejects request when tool upstream and header upstream mismatch", async () => {
     const pluginsDir = await makeTempPlugins({
       "tools/locked.ts": `

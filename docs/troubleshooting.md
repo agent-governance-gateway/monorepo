@@ -2,78 +2,53 @@
 
 ## `missing_upstream`
 
-Symptom:
+Cause: matched tool has no `resolveUpstream` and request omitted `x-acp-upstream-url`.
 
-```json
-{ "error": "missing_upstream" }
-```
+Fix: either send `x-acp-upstream-url` or add `resolveUpstream` to the tool.
 
-Fix: include header:
+## `upstream_not_allowed`
 
-```http
-x-acp-upstream-url: https://target.example/path
-```
+Cause: request sent `x-acp-upstream-url` that does not match tool pinned upstream.
+
+Fix: remove header or make it exactly match the tool upstream.
 
 ## `approval_not_found`
 
-Symptom: retry with unknown/expired task id returns 404.
+Cause: wrong or expired task id.
 
-Fix:
-- verify task id from `approval_required` response,
-- poll `GET /approvals/:id` before retry.
+Fix: use `approval_task_id` returned by `approval_required` response.
 
 ## `not_approved`
 
-Symptom: retry before decision.
+Cause: task is still pending or denied.
 
-Fix:
-- approve via `POST /approvals/:id/decision`,
-- or wait until polling returns `approved`.
+Fix: submit approval decision and retry.
 
 ## `already_consumed`
 
-Symptom: same task retried after successful execution.
+Cause: approval task already used successfully once.
 
-Fix: create new approval flow; do not reuse consumed task IDs.
+Fix: create a new request and approval task.
 
 ## `binding_mismatch`
 
-Symptom: task approved, but retry fails with mismatch.
+Cause: retry request differs in principal/method/host/path/approvalBind.
 
-Fix:
-- keep principal headers unchanged (`x-tenant-id`, `x-env`, `x-agent-id` etc.),
-- keep same method/path/host target,
-- keep same normalized binding inputs.
+Fix: retry the exact same action context.
 
-## Approval stuck in `pending`
+## `403 forbidden` on approval endpoints
 
-Checklist:
-1. Was manual decision sent to `/approvals/:id/decision`?
-2. If using external approver integration, is webhook URL reachable?
-3. Does approver principal match the task principal (otherwise `403 forbidden`)?
+Cause: principal does not own the task.
 
-## 403 denied
+Fix: call with same principal identity used to create the task.
 
-Symptom:
+## `config_error` with postgres store
 
-```json
-{ "error": "denied", "reason": "..." }
-```
+Cause: `STORE_TYPE=postgres` but no `STORE_URL`.
 
-Fix:
-- inspect routing rules order,
-- confirm principal fields and tool normalization result.
+Fix: set `STORE_URL` or alias (`DATABASE_URL`, `DB_URL`).
 
-## DB connection failures
+## Next steps
 
-If using Postgres approvals store:
-- ensure `STORE_URL` is set and reachable,
-- ensure schema/migrations are applied.
-
-## Health check
-
-Gateway health endpoint:
-
-```bash
-curl -s http://localhost:3100/healthz
-```
+- [FAQ](./faq.md)
+- [Endpoints reference](./reference/endpoints.md)
