@@ -6,6 +6,16 @@ ACP docs follow Diátaxis:
 - Reference: complete specs.
 - Explanation: architecture and trade-offs.
 
+## What ACP does
+
+ACP receives agent requests, resolves identity, normalizes action context, applies routing/policy/approval logic, and then either denies or proxies to upstream.
+
+## Why teams use ACP
+
+- enforce risky-action controls consistently,
+- create auditable decision trails,
+- roll out governance gradually without blocking product delivery.
+
 ## View docs as a website
 
 Local preview:

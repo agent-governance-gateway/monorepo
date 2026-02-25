@@ -20,6 +20,12 @@ markdown_extensions:
       alternate_style: true
 nav:
   - Home: index.md
+  - Explanation:
+      - Why ACP: explanation/why.md
+      - Concepts: explanation/concepts.md
+      - Architecture: explanation/architecture.md
+      - Security model: explanation/security-model.md
+      - Trade-offs: explanation/tradeoffs.md
   - Tutorials:
       - Quickstart: tutorials/quickstart.md
       - Approvals End-to-End: tutorials/approvals-end-to-end.md
@@ -43,12 +49,6 @@ nav:
       - Audit events: reference/audit-events.md
       - OpenTelemetry spans and metrics: reference/otel-spans-metrics.md
       - OPA contract: reference/opa-contract.md
-  - Explanation:
-      - Why ACP: explanation/why.md
-      - Concepts: explanation/concepts.md
-      - Architecture: explanation/architecture.md
-      - Security model: explanation/security-model.md
-      - Trade-offs: explanation/tradeoffs.md
   - Recipes:
       - Cookbook: recipes/cookbook.md
   - Operations:
