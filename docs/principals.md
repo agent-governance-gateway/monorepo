@@ -1,27 +1,24 @@
 # Principals
 
-`Principal` is who initiated the action. It powers routing, approvals, and audit context.
+Principals define who is calling. Gateway uses principal data for:
+- routing matches (`agentId`, `env`)
+- approval ownership checks (`principalKey`)
+- request/audit/cost attribution
 
-## Why Principals matter
+Example files:
+- `apps/example-basic/principals/01-headers.ts`
+- `apps/example-basic/principals/20-domain.ts`
+- `apps/example-basic/principals/99-fallback.ts`
 
-Without stable principal fields, safe policy is hard. Example: `requireApproval` for `env=prod` only works if `env` is resolved correctly.
+## Resolver merge behavior
 
-## Resolver interface
+- Resolvers are loaded in filename order.
+- Each resolver returns partial principal fields.
+- Later resolvers overwrite earlier values.
 
-Each file in `principals/` exports one resolver:
+Use numeric file prefixes (`01-`, `20-`, `99-`) to control precedence.
 
-```ts
-/// <reference types="@acp/config/globals" />
-
-export default definePrincipalResolver({
-  id: "resolver-id",
-  resolve: (ctx) => ({ agentId: "..." }),
-});
-```
-
-## Real-world resolver patterns
-
-### 1) Headers (most common)
+## Header-based resolver
 
 ```ts
 /// <reference types="@acp/config/globals" />
@@ -29,78 +26,57 @@ export default definePrincipalResolver({
 export default definePrincipalResolver({
   id: "headers",
   resolve: (ctx) => ({
-    tenantId: typeof ctx.headers["x-tenant-id"] === "string" ? ctx.headers["x-tenant-id"] : undefined,
     env: typeof ctx.headers["x-env"] === "string" ? ctx.headers["x-env"] : "dev",
-    agentId: typeof ctx.headers["x-agent-id"] === "string" ? ctx.headers["x-agent-id"] : "unknown-agent",
+    tenantId: typeof ctx.headers["x-tenant-id"] === "string" ? ctx.headers["x-tenant-id"] : undefined,
+    agentId: typeof ctx.headers["x-agent-id"] === "string" ? ctx.headers["x-agent-id"] : undefined,
     workflowId: typeof ctx.headers["x-workflow-id"] === "string" ? ctx.headers["x-workflow-id"] : undefined,
+    executionId: typeof ctx.headers["x-execution-id"] === "string" ? ctx.headers["x-execution-id"] : undefined,
     runId: typeof ctx.headers["x-run-id"] === "string" ? ctx.headers["x-run-id"] : undefined,
   }),
 });
 ```
 
-### 2) Subdomain mapping
+## API key mapping resolver
 
 ```ts
 /// <reference types="@acp/config/globals" />
 
-export default definePrincipalResolver({
-  id: "subdomain",
-  resolve: (ctx) => {
-    if (!ctx.host.endsWith(".agents.internal")) return null;
-    const agentId = ctx.host.replace(".agents.internal", "");
-    return { agentId };
-  },
-});
-```
-
-### 3) Service identity mapping
-
-```ts
-/// <reference types="@acp/config/globals" />
-
-const serviceMap: Record<string, string> = {
-  "svc-payments": "payments-worker",
-  "svc-risk": "risk-worker",
+const AGENT_KEYS: Record<string, { tenantId: string; agentId: string; env: string }> = {
+  "key-prod-agent-a": { tenantId: "tenant-a", agentId: "agent-a", env: "prod" },
+  "key-staging-agent-b": { tenantId: "tenant-b", agentId: "agent-b", env: "staging" },
 };
 
 export default definePrincipalResolver({
-  id: "service-map",
+  id: "api-key-map",
   resolve: (ctx) => {
-    const key = typeof ctx.headers["x-service-id"] === "string" ? ctx.headers["x-service-id"] : undefined;
-    return key ? { serviceId: serviceMap[key] ?? key } : null;
+    const key = typeof ctx.headers["x-api-key"] === "string" ? ctx.headers["x-api-key"] : undefined;
+    if (!key) return null;
+    return AGENT_KEYS[key] ?? { agentId: "unauthorized" };
   },
 });
 ```
 
-## Merge behavior
-
-- Resolvers run in alphabetical file order.
-- Results are merged.
-- Later resolver overwrites earlier fields.
-
-Example layout:
-
-```text
-principals/
-  01-headers.ts
-  02-subdomain.ts
-  99-manual-override.ts
-```
-
-## Routing with principal fields
+You can then deny unknown keys with routing:
 
 ```ts
-routing: {
-  defaultAction: { type: "passThrough" },
-  rules: [
-    { match: { env: "prod", method: "POST" }, action: { type: "requireApproval", handler: "webhook" } },
-    { match: { agentId: "dangerous-agent", method: "DELETE" }, action: { type: "deny", reason: "agent_blocked" } },
-  ],
-}
+{ match: { agentId: "unauthorized" }, action: { type: "deny", reason: "invalid_api_key" } }
 ```
 
-## Troubleshooting principal issues
+## Domain/subdomain resolver
 
-- Add temporary debug sink and inspect `canonical.principal` in audit events.
-- Ensure resolver filenames/order are intentional.
-- Keep principal fields stable; avoid random values.
+```ts
+/// <reference types="@acp/config/globals" />
+
+export default definePrincipalResolver({
+  id: "domain-agent",
+  resolve: (ctx) => {
+    if (!ctx.host.endsWith(".agents.local")) return null;
+    return { agentId: ctx.host.replace(".agents.local", "") };
+  },
+});
+```
+
+## Approval ownership
+
+`GET /approvals/:id` and `POST /approvals/:id/decision` also run principal resolution.
+Only the same resolved `principalKey` can read/decide a task. Others get `403`.

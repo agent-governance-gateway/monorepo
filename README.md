@@ -1,6 +1,6 @@
 # agent-governance-gateway
 
-Agent Governance Gateway (ACP) is an HTTP governance layer for agent traffic. It normalizes requests, resolves principals, applies routing/policy decisions, supports approval workflows, and emits audit/telemetry.
+Agent Governance Gateway (ACP) is an HTTP control plane for agent actions. It sits in front of your real upstream APIs, resolves who is calling, normalizes what action is being requested, applies routing policy, triggers approvals when needed, and emits audit + telemetry.
 
 ## Why this exists
 
@@ -18,12 +18,12 @@ ACP gives one consistent control point.
 - Security/compliance teams needing decision trails.
 - AI teams integrating external tools/APIs and wanting safe rollout.
 
-## 5-minute quickstart
+## 5-minute quickstart (single process, no mocks)
 
 ```bash
 pnpm install
 cp .env.example .env
-pnpm dev:example
+pnpm dev
 ```
 
 You should see:
@@ -32,6 +32,17 @@ You should see:
 - `already_consumed` on second retry.
 
 Full walkthrough: [docs/quickstart.md](./docs/quickstart.md)
+
+## Subsystems
+
+- `Principals`: who is calling (`tenantId`, `agentId`, `env`, `runId`, ...)
+- `Tools`: normalize request into `tool/action/resource/approvalBind`
+- `Routing Rules`: ordered rules (`passThrough`, `deny`, `requireApproval`, `enforcePolicy`)
+- `Approvals`: task lifecycle + one-time consume
+- `Proxying`: forwards to real upstream from `x-acp-upstream-url`
+- `Audit`: lifecycle events to sinks + DB (when postgres store is enabled)
+- `OpenTelemetry`: spans/metrics (disabled by default)
+- `OPA`: policy decision hook (disabled by default)
 
 ## Core headers
 

@@ -5,7 +5,7 @@ export async function proxyUpstream(
   req: FastifyRequest,
   reply: FastifyReply,
   body: Buffer,
-): Promise<{ status: number; latencyMs: number }> {
+): Promise<{ status: number; latencyMs: number; headers: Record<string, string>; body: Buffer }> {
   const upstreamUrl = req.headers[INTERNAL_HEADERS.UPSTREAM_URL] as string | undefined;
   if (!upstreamUrl) {
     throw new ACPError("missing_upstream", "X-ACP-Upstream-Url header is required", 400);
@@ -30,11 +30,18 @@ export async function proxyUpstream(
   });
 
   reply.status(upstreamResponse.status);
+  const responseHeaders: Record<string, string> = {};
   upstreamResponse.headers.forEach((value, key) => {
     reply.header(key, value);
+    responseHeaders[key] = value;
   });
 
   const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
   reply.send(responseBody);
-  return { status: upstreamResponse.status, latencyMs: Date.now() - started };
+  return {
+    status: upstreamResponse.status,
+    latencyMs: Date.now() - started,
+    headers: responseHeaders,
+    body: responseBody,
+  };
 }

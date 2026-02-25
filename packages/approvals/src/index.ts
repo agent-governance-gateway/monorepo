@@ -10,24 +10,39 @@ export function defineApprovalHandler(handler: ApprovalHandler): ApprovalHandler
 
 export class PostgresApprovalStore implements ApprovalStore {
   private readonly database: ACPDatabase;
+  private readonly ownsDatabase: boolean;
   private readonly autoMigrate: boolean;
   private readonly migrationsFolder?: string;
 
-  constructor(config: { url: string; autoMigrate?: boolean; migrationsFolder?: string }) {
-    this.database = createDatabase(config.url);
+  constructor(config: { url: string; autoMigrate?: boolean; migrationsFolder?: string } | {
+    database: ACPDatabase;
+    autoMigrate?: boolean;
+    migrationsFolder?: string;
+  }) {
+    if ("database" in config) {
+      this.database = config.database;
+      this.ownsDatabase = false;
+    } else {
+      this.database = createDatabase(config.url);
+      this.ownsDatabase = true;
+    }
     this.autoMigrate = config.autoMigrate ?? false;
     this.migrationsFolder = config.migrationsFolder;
   }
 
   async connect(): Promise<void> {
-    await this.database.connect();
+    if (this.ownsDatabase) {
+      await this.database.connect();
+    }
     if (this.autoMigrate && this.migrationsFolder) {
       await this.database.runMigrations(this.migrationsFolder);
     }
   }
 
   async close(): Promise<void> {
-    await this.database.close();
+    if (this.ownsDatabase) {
+      await this.database.close();
+    }
   }
 
   async create(task: ApprovalTask): Promise<void> {
@@ -47,6 +62,48 @@ export class PostgresApprovalStore implements ApprovalStore {
 
   async markConsumed(id: string, consumedBy: string): Promise<void> {
     await this.database.markApprovalConsumed(id, consumedBy);
+  }
+}
+
+export class InMemoryApprovalStore implements ApprovalStore {
+  private readonly map = new Map<string, ApprovalTask>();
+
+  async create(task: ApprovalTask): Promise<void> {
+    this.map.set(task.id, { ...task });
+  }
+
+  async get(id: string): Promise<ApprovalTask | null> {
+    return this.map.get(id) ?? null;
+  }
+
+  async setDecision(
+    id: string,
+    decision: { status: "approved" | "denied"; decidedBy?: string; decisionReason?: string },
+  ): Promise<void> {
+    const current = this.map.get(id);
+    if (!current) {
+      return;
+    }
+    this.map.set(id, {
+      ...current,
+      status: decision.status,
+      decidedBy: decision.decidedBy,
+      decisionReason: decision.decisionReason,
+      decidedAt: new Date(),
+    });
+  }
+
+  async markConsumed(id: string, consumedBy: string): Promise<void> {
+    const current = this.map.get(id);
+    if (!current) {
+      return;
+    }
+    this.map.set(id, {
+      ...current,
+      status: "consumed",
+      consumedAt: new Date(),
+      consumedBy,
+    });
   }
 }
 

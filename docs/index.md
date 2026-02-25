@@ -7,11 +7,30 @@ ACP (Agent Governance Gateway) gives you one place to control agent HTTP traffic
 - require approval when needed,
 - emit audit and telemetry.
 
+## Fast path
+
+1. Run gateway: `pnpm install && cp .env.example .env && pnpm dev`
+2. Send request with `x-acp-upstream-url`
+3. If response is `approval_required`, approve via `POST /approvals/:id/decision`
+4. Retry with `x-acp-approval-task-id`
+
 ## Start here
 
 1. [Quickstart](./quickstart.md)
 2. [Concepts](./concepts.md)
 3. [Configuration](./configuration.md)
+
+## Subsystem guides
+
+- [Principals](./principals.md): auth/identity mapping and ownership checks.
+- [Tools](./tools.md): request normalization + optional cost metadata from `afterRequest`.
+- [Routing](./routing.md): deterministic ordered rules with simple match objects.
+- [Approvals](./approvals.md): task lifecycle, binding, one-time consume.
+- [Proxying](./proxying.md): upstream forwarding behavior and required headers.
+- [Audit](./audit.md): what gets emitted and where.
+- [Observability](./observability.md): OpenTelemetry spans/metrics.
+- [OPA](./opa.md): policy integration via `enforcePolicy`.
+- [Deployment](./deployment.md): local, Docker, Helm.
 
 ## Table of contents
 

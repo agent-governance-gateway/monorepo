@@ -3,6 +3,7 @@
 export default defineSink({
   id: "stdout",
   write: async (event) => {
-    console.log(`[audit] ${event.kind} ${event.outcome?.status ?? ""}`.trim());
+    const level = event.kind === "error" ? "error" : event.kind === "approval_required" ? "warn" : "info";
+    console.log(JSON.stringify({ level, type: "acp_audit", event }));
   },
 });

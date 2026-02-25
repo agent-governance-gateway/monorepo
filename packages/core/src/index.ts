@@ -64,6 +64,9 @@ export type RequestContext = {
   ip?: string;
 };
 
+export type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+export type JsonObject = { [key: string]: JsonValue };
+
 export type ToolPack = {
   id: string;
   match(ctx: RequestContext): boolean;
@@ -77,6 +80,30 @@ export type ToolPack = {
     headers?: (headers: Record<string, unknown>) => Record<string, unknown>;
     body?: (body: Buffer) => Buffer | null;
   };
+  afterRequest?: (
+    input: ToolAfterRequestInput,
+  ) => Promise<ToolAfterRequestMeta | void> | ToolAfterRequestMeta | void;
+};
+
+export type ToolAfterRequestInput = {
+  ctx: RequestContext;
+  canonical: CanonicalAction;
+  requestBody: Buffer;
+  upstream: {
+    status: number;
+    latencyMs: number;
+    headers: Record<string, string>;
+    body: Buffer;
+  };
+};
+
+export type ToolAfterRequestMeta = {
+  cost?: {
+    amount: number;
+    currency?: string;
+  };
+  reason?: string;
+  metadata?: JsonObject;
 };
 
 export type PrincipalResolver = {
@@ -88,6 +115,7 @@ export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "co
 
 export type ApprovalTask = {
   id: string;
+  requestId?: string;
   status: ApprovalStatus;
   createdAt: Date;
   expiresAt?: Date;
@@ -135,6 +163,9 @@ export type AuditEvent = {
     reason?: string;
     upstreamStatus?: number;
     latencyMs?: number;
+    cost?: ToolAfterRequestMeta["cost"];
+    costReason?: string;
+    metadata?: ToolAfterRequestMeta["metadata"];
   };
 };
 
@@ -142,7 +173,17 @@ export interface AuditSink {
   id: string;
   write(event: AuditEvent): Promise<void>;
   flush?(): Promise<void>;
+  close?(): Promise<void>;
 }
+
+export type ControlPlaneStoreConfig =
+  | { type: "memory" }
+  | {
+      type: "postgres";
+      connection: {
+        url: string;
+      };
+    };
 
 export type ACPConfig = {
   routing: RoutingConfig;
@@ -154,14 +195,7 @@ export type ACPConfig = {
     port: number;
     basePath?: string;
   };
-  approvalsRuntime?: {
-    store: {
-      type: "postgres";
-      url: string;
-    };
-    defaultHandlerId: string;
-    decisionSigningSecret?: string;
-  };
+  store: ControlPlaneStoreConfig;
   audit?: {
     sinks: string[];
   };

@@ -1,36 +1,48 @@
 # Tools
 
-Tools convert raw HTTP requests into canonical target fields used by routing, approvals, and audit.
+Tools map raw HTTP requests into canonical target fields:
+- `tool`
+- `action`
+- `resource`
+- `approvalBind` (optional)
 
-## How matching works
+Routing and approvals use these fields.
 
-Gateway calls `chooseTool()`:
-1. First tool with `match(ctx) === true` is selected.
-2. `normalize(ctx, body)` creates `tool/action/resource/approvalBind`.
-3. If nothing matches, built-in `generic-http` fallback is used.
+## How tool selection works
 
-## Built-in tools
+1. Gateway picks the first tool where `match(ctx)` is `true`.
+2. Calls `normalize(ctx, body)`.
+3. If no custom tool matches, built-in `generic-http` handles request.
 
-From `@acp/tools`:
-- `openai-like`
-- `generic-http`
-
-## Tool interface
+## Tool shape
 
 ```ts
 export default defineTool({
-  id: "example",
-  match: (ctx) => boolean,
-  normalize: (ctx, body) => ({
+  id: "my-tool",
+  match: (ctx) => ctx.host.endsWith("example.com"),
+  normalize: (ctx) => ({
     tool: "example",
-    action: "operation",
+    action: "create",
     resource: ctx.host,
     approvalBind: `example:${ctx.method}:${ctx.path}`,
+  }),
+  afterRequest: ({ upstream, canonical }) => ({
+    cost: { amount: 0.0012, currency: "USD" },
+    reason: "vendor_pricing",
+    metadata: {
+      provider: "example",
+      status: upstream.status,
+      tool: canonical.target.tool,
+    },
   }),
 });
 ```
 
-## Example: Slack-like tool
+## Real examples
+
+### Slack
+
+`apps/example-basic/tools/slack.ts`
 
 ```ts
 /// <reference types="@acp/config/globals" />
@@ -47,40 +59,19 @@ export default defineTool({
 });
 ```
 
-## Example: OpenAI-like tool
+### OpenAI (with cost metadata)
 
-```ts
-/// <reference types="@acp/config/globals" />
+`apps/example-basic/tools/openai.ts` uses `afterRequest` to parse usage fields and report cost.
 
-export default defineTool({
-  id: "openai",
-  match: (ctx) => ctx.path.includes("/v1/") || ctx.host.includes("openai"),
-  normalize: (ctx) => ({
-    tool: "openai",
-    action: ctx.path.includes("chat/completions") ? "chat.completions" : "unknown",
-    resource: ctx.host,
-    approvalBind: `openai:${ctx.method}:${ctx.host}:${ctx.path}`,
-  }),
-});
-```
+Output shape from `afterRequest` is generic:
+- `cost`: numeric amount + currency
+- `reason`: free-form attribution reason
+- `metadata`: user-defined key/value fields
 
-## Redaction in tools
+Gateway includes this data in executed audit event and persists it to DB when `store.type=postgres`.
 
-`ToolPack` supports optional redaction hooks:
+## Redaction and safety
 
-```ts
-redact: {
-  headers: (headers) => ({ ...headers, authorization: "***REDACTED***" }),
-  body: (body) => null,
-}
-```
-
-> NOTE
-> Current gateway canonical metadata already redacts common sensitive headers globally.
-> Request body is not logged by default.
-
-## Tool design tips
-
-- Keep `approvalBind` stable (no nonce/token).
-- Keep `action` small and deterministic.
-- Use `resource` for policy/routing granularity (e.g., host or entity path).
+- Gateway already redacts sensitive headers in canonical metadata.
+- Request body is not logged by default.
+- Keep `approvalBind` stable and deterministic (no nonces/timestamps).

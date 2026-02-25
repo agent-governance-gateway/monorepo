@@ -16,7 +16,7 @@ If missing, gateway returns:
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
-  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-upstream-url: https://httpbin.org/post' \
   -H 'content-type: application/json' \
   -d '{"prompt":"hello"}'
 ```
@@ -29,18 +29,18 @@ First call (approval required by route):
 curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
-  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-upstream-url: https://httpbin.org/post' \
   -H 'content-type: application/json' \
   -d '{"prompt":"hello"}'
 ```
 
-Retry after approval:
+Retry after manual approval:
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
-  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-upstream-url: https://httpbin.org/post' \
   -H 'x-acp-approval-task-id: <id>' \
   -H 'x-idempotency-key: req-1' \
   -H 'content-type: application/json' \

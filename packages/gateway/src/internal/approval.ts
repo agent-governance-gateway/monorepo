@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { toStablePrincipalKey, type ApprovalTask, type CanonicalAction } from "@acp/core";
-import { safeTimingEqualHex } from "@acp/utils";
 
 export function generateTaskId(): string {
   return crypto.randomUUID();
@@ -31,9 +30,4 @@ export function sameBinding(task: ApprovalTask, canonical: CanonicalAction): boo
     task.path === bind.path &&
     (task.approvalBind ?? "") === (bind.approvalBind ?? "")
   );
-}
-
-export function verifyDecisionSignature(secret: string, payload: unknown, provided: string | undefined): boolean {
-  const expected = crypto.createHmac("sha256", secret).update(JSON.stringify(payload)).digest("hex");
-  return safeTimingEqualHex(expected, provided);
 }

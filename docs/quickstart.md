@@ -1,50 +1,41 @@
-# Quickstart (Beginner-Friendly)
+# Quickstart (No Mocks, Single Process)
 
-This walkthrough uses the real `apps/example-basic` app and takes under 10 minutes.
+This quickstart runs only the Gateway. You will use:
+- a real upstream URL via `x-acp-upstream-url`
+- manual approval via Gateway API (`POST /approvals/:id/decision`)
 
-## What runs
+## 0) Prerequisites
 
-- Gateway: `http://localhost:3100`
-- Upstream mock: `http://localhost:3200`
-- Approver mock: `http://localhost:3300`
+- Node.js + pnpm
+- Internet access for demo upstream (or your own internal upstream URL)
 
-```mermaid
-flowchart LR
-  Client --> Gateway
-  Gateway --> Upstream
-  Gateway --> Approver
-  Approver --> Gateway
-```
+## 1) Start Gateway (one command)
 
-## 1) Install and run
+From repo root:
 
 ```bash
 pnpm install
 cp .env.example .env
-pnpm dev:example
+pnpm dev
 ```
 
-## 2) Expected console output
+Gateway runs on `http://localhost:3100`.
 
-You should see lines like:
+> NOTE
+> Default example store mode is memory (`STORE_TYPE=memory`), so Postgres is not required.
 
-```text
-approval_required: { approval_task_id: "...", poll_url: "/approvals/..." }
-retry status: 200 {"ok":true,...}
-second retry status: 409 {"error":"already_consumed",...}
+## 2) Choose upstream URL
+
+- Option A (recommended): your own internal endpoint
+- Option B (demo): `https://httpbin.org/post`
+
+Set shell variable:
+
+```bash
+export UPSTREAM_URL="https://httpbin.org/post"
 ```
 
-## 3) What just happened
-
-1. First POST matched `requireApproval` rule (`x-env: prod` in example).
-2. Gateway returned `202 approval_required`.
-3. Approver mock called decision endpoint and approved task.
-4. Client retried with `x-acp-approval-task-id`, upstream executed.
-5. Second retry failed (`already_consumed`).
-
-## 4) Manual curl flow (copy/paste)
-
-### A) Request (expect `202 approval_required`)
+## 3) Send first request (expect approval_required)
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
@@ -52,11 +43,13 @@ curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
   -H 'x-tenant-id: tenant-demo' \
-  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
-  -d '{"prompt":"hello"}'
+  -H "x-acp-upstream-url: ${UPSTREAM_URL}" \
+  -d '{"message":"hello"}'
 ```
 
-Expected response body:
+Expected status: `202`
+
+Expected body shape:
 
 ```json
 {
@@ -67,21 +60,17 @@ Expected response body:
 }
 ```
 
-### B) Poll status
+Save `approval_task_id` as `<TASK_ID>`.
+
+## 4) Approve manually via gateway API
 
 ```bash
-curl -s http://localhost:3100/approvals/<id>
-```
-
-### C) Approve task
-
-```bash
-curl -i -X POST http://localhost:3100/approvals/<id>/decision \
+curl -i -X POST http://localhost:3100/approvals/<TASK_ID>/decision \
   -H 'content-type: application/json' \
-  -d '{"status":"approved","decidedBy":"operator-1","reason":"ok"}'
+  -d '{"status":"approved","decidedBy":"manual-operator","reason":"approved for demo"}'
 ```
 
-### D) Retry with approval task id (expect `200`)
+## 5) Retry with approval header (expect executed)
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
@@ -89,13 +78,15 @@ curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
   -H 'x-tenant-id: tenant-demo' \
-  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
-  -H 'x-acp-approval-task-id: <id>' \
-  -H 'x-idempotency-key: req-1' \
-  -d '{"prompt":"hello"}'
+  -H "x-acp-upstream-url: ${UPSTREAM_URL}" \
+  -H 'x-acp-approval-task-id: <TASK_ID>' \
+  -H 'x-idempotency-key: req-001' \
+  -d '{"message":"hello"}'
 ```
 
-### E) Retry same task again (expect `409 already_consumed`)
+Expected status: `200` (or upstream success status).
+
+## 6) Retry same task again (must fail)
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
@@ -103,22 +94,33 @@ curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
   -H 'x-tenant-id: tenant-demo' \
-  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
-  -H 'x-acp-approval-task-id: <id>' \
-  -H 'x-idempotency-key: req-2' \
-  -d '{"prompt":"hello"}'
+  -H "x-acp-upstream-url: ${UPSTREAM_URL}" \
+  -H 'x-acp-approval-task-id: <TASK_ID>' \
+  -H 'x-idempotency-key: req-002' \
+  -d '{"message":"hello"}'
 ```
 
-## 5) Additional expected errors
+Expected status: `409`
 
-### Denied rule (`403`)
+Expected error:
+
+```json
+{
+  "error": "already_consumed",
+  "message": "approval task already consumed"
+}
+```
+
+## 7) Extra checks
+
+### Deny rule (`DELETE`)
 
 ```bash
 curl -i -X DELETE http://localhost:3100/invoke \
-  -H 'x-acp-upstream-url: http://localhost:3200/delete'
+  -H "x-acp-upstream-url: ${UPSTREAM_URL}"
 ```
 
-Expected error:
+Expected: `403`
 
 ```json
 { "error": "denied", "reason": "delete_is_forbidden" }
@@ -126,53 +128,20 @@ Expected error:
 
 ### Binding mismatch (`409`)
 
-Use same approved task id but change path/method/host/principal.
-
-Expected error:
+Retry using same task id but different path/method/host/principal; expected:
 
 ```json
 { "error": "binding_mismatch", "message": "approval binding mismatch" }
 ```
 
-## 6) TypeScript client example
+## Header cheat sheet (beginner)
 
-```ts
-const first = await fetch("http://localhost:3100/invoke", {
-  method: "POST",
-  headers: {
-    "content-type": "application/json",
-    "x-env": "prod",
-    "x-agent-id": "agent-demo",
-    "x-tenant-id": "tenant-demo",
-    "x-acp-upstream-url": "http://localhost:3200/v1/chat/completions",
-  },
-  body: JSON.stringify({ prompt: "hello" }),
-});
-
-const approval = await first.json();
-
-const retry = await fetch("http://localhost:3100/invoke", {
-  method: "POST",
-  headers: {
-    "content-type": "application/json",
-    "x-env": "prod",
-    "x-agent-id": "agent-demo",
-    "x-tenant-id": "tenant-demo",
-    "x-acp-upstream-url": "http://localhost:3200/v1/chat/completions",
-    "x-acp-approval-task-id": approval.approval_task_id,
-    "x-idempotency-key": "req-100",
-  },
-  body: JSON.stringify({ prompt: "hello" }),
-});
-```
+- `x-acp-upstream-url`: where Gateway should proxy this request.
+- `x-acp-approval-task-id`: only for approved retry.
+- `x-idempotency-key`: recommended unique key for retries.
 
 ## Troubleshooting
 
-### `missing_upstream`
-You must send `x-acp-upstream-url`.
-
-### Task stays `pending`
-Check approver connectivity and decision endpoint calls.
-
-### DB errors
-If `APPROVALS_DB_URL` is unset, example uses in-memory approval store.
+- `missing_upstream`: missing `x-acp-upstream-url`.
+- `not_approved`: approval decision not set yet.
+- `approval_not_found`: wrong task id.

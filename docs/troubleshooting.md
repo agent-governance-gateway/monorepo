@@ -48,10 +48,9 @@ Fix:
 ## Approval stuck in `pending`
 
 Checklist:
-1. Is approver reachable?
-2. Is webhook URL correct?
-3. Is approver posting to `/approvals/:id/decision`?
-4. If signing enabled, is `x-acp-signature` valid?
+1. Was manual decision sent to `/approvals/:id/decision`?
+2. If using external approver integration, is webhook URL reachable?
+3. Does approver principal match the task principal (otherwise `403 forbidden`)?
 
 ## 403 denied
 
@@ -68,7 +67,7 @@ Fix:
 ## DB connection failures
 
 If using Postgres approvals store:
-- ensure `APPROVALS_DB_URL` is set and reachable,
+- ensure `STORE_URL` is set and reachable,
 - ensure schema/migrations are applied.
 
 ## Health check

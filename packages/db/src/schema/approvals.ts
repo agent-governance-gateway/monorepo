@@ -1,7 +1,8 @@
-import { pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 
 export const approvalTasksTable = pgTable("acp_approval_tasks", {
   id: varchar("id", { length: 128 }).primaryKey(),
+  requestId: uuid("request_id"),
   status: varchar("status", { length: 24 }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }),

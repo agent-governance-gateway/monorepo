@@ -1,49 +1,46 @@
 # Approvals
 
-Approvals are triggered by routing rules (`requireApproval`) or OPA decision (`require_approval`).
+Approvals are triggered by:
+- routing action `requireApproval`
+- OPA decision `require_approval`
 
 ## Lifecycle
 
-1. Gateway creates task (`pending`).
-2. Returns `202` with `approval_task_id` and `poll_url`.
-3. Approver posts decision to `/approvals/:id/decision`.
-4. Client retries original request with `x-acp-approval-task-id`.
-5. After successful upstream response, task is marked `consumed`.
+1. Request matches approval rule.
+2. Gateway creates task (`pending`) and returns `202 approval_required`.
+3. Operator/system decides task via `POST /approvals/:id/decision`.
+4. Client retries same request with `x-acp-approval-task-id`.
+5. On successful upstream response, task becomes `consumed`.
+6. Reusing same task returns `409 already_consumed`.
 
 ## Endpoints
 
 - `GET /approvals/:id`
 - `POST /approvals/:id/decision`
 
-(If `basePath` is set, endpoints are prefixed.)
+If `gateway.basePath` is set, endpoints are prefixed.
 
 ## Binding rules
 
-Gateway binds approval to:
-- `principalKey`
-- `method`
-- `host`
-- `path`
-- optional `approvalBind`
+Task is bound to:
+- `principalKey` (from resolved principal)
+- request `method`
+- request `host`
+- request `path`
+- optional `approvalBind` from tool normalization
 
-No body hashing by default.
+Body hashing is not used by default.
 
-## Retry headers
+## Manual flow (curl)
 
-- required: `x-acp-approval-task-id`
-- recommended: `x-idempotency-key`
-- also needed for execution: `x-acp-upstream-url`
-
-## Example flow (curl)
-
-### Request requiring approval
+### 1) Trigger approval
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
   -H 'x-tenant-id: tenant-a' \
-  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-upstream-url: https://httpbin.org/post' \
   -H 'content-type: application/json' \
   -d '{"prompt":"hello"}'
 ```
@@ -54,56 +51,40 @@ Expected `202`:
 {
   "status": "approval_required",
   "approval_task_id": "<id>",
-  "poll_url": "/approvals/<id>"
+  "poll_url": "/approvals/<id>",
+  "reason": "route requires approval"
 }
 ```
 
-### Approve
+### 2) Decide task
 
 ```bash
 curl -i -X POST http://localhost:3100/approvals/<id>/decision \
   -H 'content-type: application/json' \
-  -d '{"status":"approved","decidedBy":"ops"}'
+  -d '{"status":"approved","decidedBy":"ops","reason":"ok"}'
 ```
 
-### Retry execute
+### 3) Retry with approval id
 
 ```bash
 curl -i -X POST http://localhost:3100/invoke \
   -H 'x-env: prod' \
   -H 'x-agent-id: agent-demo' \
   -H 'x-tenant-id: tenant-a' \
-  -H 'x-acp-upstream-url: http://localhost:3200/v1/chat/completions' \
+  -H 'x-acp-upstream-url: https://httpbin.org/post' \
   -H 'x-acp-approval-task-id: <id>' \
-  -H 'x-idempotency-key: req-1' \
+  -H 'x-idempotency-key: retry-001' \
   -H 'content-type: application/json' \
   -d '{"prompt":"hello"}'
 ```
 
-### Retry again (expected `409`)
+### 4) Retry again (must fail)
 
 ```json
 { "error": "already_consumed", "message": "approval task already consumed" }
 ```
 
-### Binding mismatch (expected `409`)
+## Principal-based authorization
 
-```json
-{ "error": "binding_mismatch", "message": "approval binding mismatch" }
-```
-
-## Signature verification (optional)
-
-If `decisionSigningSecret` is configured, gateway requires `x-acp-signature` for decision endpoint.
-
-> NOTE
-> Current gateway code builds `decisionUrl` as `http://localhost:<port>/...` inside approval handler payload.
-> This works in local/same-host setups. For remote approver systems, ensure they can reach that URL (or adapt deployment/networking accordingly).
-
-## Security notes
-
-> WARNING
-> Restrict who can call `/approvals/:id/decision`.
-
-> TIP
-> Always send `x-idempotency-key` on retry.
+Approval read/decision endpoints use principal resolution too.
+If caller principal does not match task principal ownership, response is `403`.

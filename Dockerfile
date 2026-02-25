@@ -16,10 +16,10 @@ RUN pnpm build
 
 FROM node:20-alpine AS runtime
 RUN corepack enable
-WORKDIR /app
+WORKDIR /app/apps/example-basic
 ENV NODE_ENV=production
 
 COPY --from=build /app /app
 
 EXPOSE 3100
-CMD ["pnpm", "exec", "tsx", "apps/example-basic/src/gateway-only.ts"]
+CMD ["pnpm", "exec", "tsx", "index.ts"]

@@ -42,6 +42,7 @@ async function startUpstream(): Promise<{ url: string; close: () => Promise<void
 function baseConfig(port: number): ACPConfig {
   return {
     gateway: { port },
+    store: { type: "memory" },
     tools: { dir: "./tools" },
     principals: { dir: "./principals" },
     approvals: { dir: "./approvals" },
@@ -55,7 +56,6 @@ function baseConfig(port: number): ACPConfig {
     audit: { sinks: ["file"] },
     opa: { enabled: false, url: "http://127.0.0.1:1" },
     otel: { enabled: false, otlpEndpoint: "http://127.0.0.1:4318" },
-    approvalsRuntime: undefined,
     telemetry: undefined,
   };
 }
@@ -65,6 +65,7 @@ describe("gateway", () => {
     const action = __testing.pickRouteAction(
       {
         gateway: { port: 1 },
+        store: { type: "memory" },
         routing: {
           defaultAction: { type: "passThrough" },
           rules: [
@@ -196,5 +197,50 @@ describe("gateway", () => {
     );
     expect(result.env).toBe("prod");
     expect(result.agentId).toBe("a");
+  });
+
+  it("captures tool afterRequest cost metadata in executed audit", async () => {
+    const pluginsDir = await makeTempPlugins({
+      "tools/cost.ts": `
+        export default defineTool({
+          id:'cost',
+          match:()=>true,
+          normalize:(ctx)=>({tool:'cost',action:'run',resource:ctx.host,approvalBind:\`b:\${ctx.method}:\${ctx.path}\`}),
+          afterRequest:()=>({
+            cost:{amount:0.1234,currency:'USD'},
+            reason:'token_pricing',
+            metadata:{tokens:42,provider:'test'}
+          }),
+        });
+      `,
+      "principals/default.ts": "export default definePrincipalResolver({id:'p',resolve:()=>({env:'dev',agentId:'a1',tenantId:'t1'})});",
+      "approvals/noop.ts": "export default defineApprovalHandler({id:'noop',request:async()=>{}});",
+      "sinks/file.ts": "import fs from 'node:fs'; export default defineSink({id:'file',write:async(e)=>{fs.appendFileSync(process.env.ACP_TEST_AUDIT_FILE!, JSON.stringify(e)+'\\n')}});",
+    });
+
+    const upstream = await startUpstream();
+    cleanups.push(upstream.close);
+    const auditFile = path.join(pluginsDir, "audit.log");
+    process.env.ACP_TEST_AUDIT_FILE = auditFile;
+
+    const gw = await createGateway(baseConfig(0), { cwd: pluginsDir });
+    await gw.app.listen({ port: 0, host: "127.0.0.1" });
+    const addr = gw.app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${addr.port}`;
+    cleanups.push(async () => gw.stop());
+
+    const res = await fetch(`${base}/invoke`, {
+      method: "GET",
+      headers: { "x-acp-upstream-url": upstream.url },
+    });
+    expect(res.status).toBe(200);
+
+    const lines = (await fs.readFile(auditFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const executed = lines.find((event) => event.kind === "executed");
+    expect(executed).toBeTruthy();
+    expect(executed.outcome.cost.amount).toBe(0.1234);
+    expect(executed.outcome.costReason).toBe("token_pricing");
+    expect(executed.outcome.metadata.tokens).toBe(42);
   });
 });

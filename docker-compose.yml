@@ -12,36 +12,16 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  upstream:
-    build: .
-    command: ["pnpm", "exec", "tsx", "apps/example-basic/src/run-upstream.ts"]
-    ports:
-      - "3200:3200"
-
-  approver:
-    build: .
-    command: ["pnpm", "exec", "tsx", "apps/example-basic/src/run-approver.ts"]
-    ports:
-      - "3300:3300"
-
   gateway:
     build: .
     environment:
-      APPROVALS_DB_URL: postgres://postgres:postgres@postgres:5432/postgres
-      APPROVER_WEBHOOK_URL: http://approver:3300/approval-request
+      STORE_TYPE: postgres
+      STORE_URL: postgres://postgres:postgres@postgres:5432/postgres
+      NODE_ENV: production
     depends_on:
       - postgres
-      - approver
-      - upstream
     ports:
       - "3100:3100"
-
-  opa:
-    image: openpolicyagent/opa:latest
-    command: ["run", "--server", "--addr=0.0.0.0:8181"]
-    ports:
-      - "8181:8181"
-    profiles: ["opa"]
 
 volumes:
   pgdata:

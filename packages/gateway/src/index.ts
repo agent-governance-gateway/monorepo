@@ -1,12 +1,22 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import crypto from "node:crypto";
 import { installGlobals, type ConfigFactory } from "@acp/config";
 import {
   ACPError,
   INTERNAL_HEADERS,
+  toStablePrincipalKey,
   type ACPConfig,
+  type ApprovalTask,
+  type Principal,
   type ApprovalStore,
+  type AuditSink,
+  type AuditEvent,
+  type RequestContext,
+  type ToolAfterRequestMeta,
+  type ToolPack,
 } from "@acp/core";
-import { PostgresApprovalStore } from "@acp/approvals";
+import { createDatabase, type ACPDatabase } from "@acp/db";
+import { InMemoryApprovalStore, PostgresApprovalStore } from "@acp/approvals";
 import { stdoutJsonSink } from "@acp/audit";
 import { createOpaClient } from "@acp/opa";
 import { createTelemetry } from "@acp/telemetry";
@@ -16,13 +26,11 @@ import {
   generateTaskId,
   getApprovalBinding,
   sameBinding,
-  verifyDecisionSignature,
 } from "./internal/approval.js";
 import { loadDefaultExports, loadPlugins, type LoadedPlugins } from "./internal/plugins.js";
 import { proxyUpstream } from "./internal/proxy.js";
 import { buildCanonical, buildRequestContext, chooseTool, getBodyBuffer, resolvePrincipal } from "./internal/request.js";
 import { matchRule, pickRouteAction } from "./internal/routing.js";
-import { InMemoryApprovalStore } from "./internal/store.js";
 
 export type GatewayRuntime = {
   app: FastifyInstance;
@@ -31,25 +39,60 @@ export type GatewayRuntime = {
   config: ACPConfig;
 };
 
+export type ShutdownBinding = {
+  unbind: () => void;
+};
+
+export type RunGatewayOptions = {
+  cwd?: string;
+  bindSignals?: boolean;
+  exitOnSignal?: boolean;
+  exitOnError?: boolean;
+  onError?: (error: unknown) => void;
+  logStartup?: boolean;
+};
+
 export async function createGateway(input: ACPConfig | ConfigFactory, options?: { cwd?: string }): Promise<GatewayRuntime> {
   const cwd = options?.cwd ?? process.cwd();
   const config = typeof input === "function" ? input({ cwd }) : input;
+  const storeType = config.store.type;
+  const dbUrl = storeType === "postgres" ? config.store.connection.url : undefined;
+  let sharedDb: ACPDatabase | undefined;
+  if (dbUrl) {
+    sharedDb = createDatabase(dbUrl);
+    await sharedDb.connect();
+  }
 
   installGlobals();
   const plugins = await loadPlugins(config, cwd);
 
-  const approvalStore: ApprovalStore = config.approvalsRuntime?.store.type === "postgres"
-    ? new PostgresApprovalStore({ url: config.approvalsRuntime.store.url })
-    : new InMemoryApprovalStore();
+  let approvalStore: ApprovalStore = new InMemoryApprovalStore();
+  if (storeType === "postgres") {
+    if (!dbUrl) {
+      throw new ACPError("config_error", "store.connection.url is required for postgres store", 500);
+    }
+    approvalStore = sharedDb
+      ? new PostgresApprovalStore({ database: sharedDb })
+      : new PostgresApprovalStore({ url: dbUrl });
+  }
 
   if (approvalStore instanceof PostgresApprovalStore) {
     await approvalStore.connect();
   }
 
   const approvalHandlers = new Map(plugins.approvals.map((handler) => [handler.id, handler]));
-  const selectedSinks = config.audit?.sinks?.length
-    ? plugins.sinks.filter((sink) => config.audit?.sinks.includes(sink.id))
-    : plugins.sinks;
+  const builtInSinks: AuditSink[] = [stdoutJsonSink];
+  const sinkById = new Map<string, AuditSink>();
+  for (const sink of [...plugins.sinks, ...builtInSinks]) {
+    if (!sinkById.has(sink.id)) {
+      sinkById.set(sink.id, sink);
+    }
+  }
+
+  const configuredSinkIds = config.audit?.sinks;
+  const defaultSinkIds = buildDefaultAuditSinkIds();
+  const selectedSinkIds = configuredSinkIds?.length ? [...configuredSinkIds] : [...defaultSinkIds];
+  const selectedSinks = selectedSinkIds.map((id) => sinkById.get(id)).filter((sink): sink is AuditSink => Boolean(sink));
   const auditSinks = selectedSinks.length ? selectedSinks : [stdoutJsonSink];
 
   const opa = createOpaClient(config.opa ? { enabled: config.opa.enabled, url: config.opa.url } : undefined);
@@ -69,6 +112,10 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
       if (!task) {
         return reply.status(404).send({ error: "not_found" });
       }
+      const principal = await resolvePrincipal(plugins.principals, buildRequestContext(req));
+      if (!ownsTask(task, principal)) {
+        return reply.status(403).send({ error: "forbidden" });
+      }
       return reply.send(task);
     } finally {
       span.end();
@@ -78,32 +125,37 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
   app.post(route("/approvals/:id/decision"), async (req, reply) => {
     const span = telemetry.startSpan("acp.approval");
     try {
+      const requestId = crypto.randomUUID();
       const body = req.body as { status: "approved" | "denied"; decidedBy?: string; reason?: string };
-      if (config.approvalsRuntime?.decisionSigningSecret) {
-        const signature = req.headers["x-acp-signature"] as string | undefined;
-        const ok = verifyDecisionSignature(config.approvalsRuntime.decisionSigningSecret, body, signature);
-        if (!ok) {
-          return reply.status(401).send({ error: "invalid_signature" });
-        }
+      const task = await approvalStore.get((req.params as { id: string }).id);
+      if (!task) {
+        return reply.status(404).send({ error: "not_found" });
       }
+      const principal = await resolvePrincipal(plugins.principals, buildRequestContext(req));
+      if (!ownsTask(task, principal)) {
+        return reply.status(403).send({ error: "forbidden" });
+      }
+      const canonicalForDecision = {
+        principal,
+        channel: "http" as const,
+        request: { method: "POST", host: "gateway", path: route("/approvals/:id/decision") },
+        target: {},
+      };
+      await persistRequestRecord(sharedDb, requestId, canonicalForDecision);
 
       await approvalStore.setDecision((req.params as { id: string }).id, {
         status: body.status,
-        decidedBy: body.decidedBy,
+        decidedBy: body.decidedBy ?? principal.agentId ?? principal.serviceId ?? principal.userId,
         decisionReason: body.reason,
       });
 
-      await emitAudit(auditSinks, {
+      const event: AuditEvent = {
         ts: new Date().toISOString(),
         kind: "approval_decided",
-        canonical: {
-          principal: {},
-          channel: "http",
-          request: { method: "POST", host: "gateway", path: route("/approvals/:id/decision") },
-          target: {},
-        },
+        canonical: canonicalForDecision,
         outcome: { status: "allowed", reason: body.status },
-      });
+      };
+      await writeAudit(sharedDb, auditSinks, event, requestId);
 
       return reply.send({ status: body.status });
     } finally {
@@ -113,6 +165,7 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
 
   app.all(route("/*"), async (req, reply) => {
     const requestSpan = telemetry.startSpan("acp.request");
+    const requestId = crypto.randomUUID();
     const body = getBodyBuffer(req);
     const ctx = buildRequestContext(req);
     const principal = await resolvePrincipal(plugins.principals, ctx);
@@ -120,13 +173,15 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
 
     const tool = chooseTool(plugins.tools, ctx);
     const canonical = buildCanonical(ctx, principal, tool.normalize(ctx, body), body);
+    await persistRequestRecord(sharedDb, requestId, canonical);
 
-    await emitAudit(auditSinks, {
+    const requestEvent: AuditEvent = {
       ts: new Date().toISOString(),
       kind: "request",
       canonical,
       outcome: { status: "allowed" },
-    });
+    };
+    await writeAudit(sharedDb, auditSinks, requestEvent, requestId);
 
     try {
       const approvalTaskId = typeof req.headers[INTERNAL_HEADERS.APPROVAL_TASK_ID] === "string"
@@ -148,21 +203,30 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
           throw new ACPError("binding_mismatch", "approval binding mismatch", 409);
         }
 
-        const result = await proxyUpstream(req, reply, body);
-        telemetry.recordLatency("acp.upstream.latency_ms", result.latencyMs);
-        if (isSuccessStatus(result.status)) {
+        const result = await executeUpstreamWithToolMeta(tool, ctx, canonical, body, req, reply);
+        telemetry.recordLatency("acp.upstream.latency_ms", result.upstream.latencyMs);
+        if (isSuccessStatus(result.upstream.status)) {
           await approvalStore.markConsumed(
             approvalTaskId,
             typeof req.headers["x-idempotency-key"] === "string" ? req.headers["x-idempotency-key"] : "none",
           );
         }
 
-        await emitAudit(auditSinks, {
+        const event: AuditEvent = {
           ts: new Date().toISOString(),
           kind: "executed",
           canonical,
-          outcome: { status: "executed", upstreamStatus: result.status, latencyMs: result.latencyMs },
-        });
+          outcome: {
+            status: "executed",
+            upstreamStatus: result.upstream.status,
+            latencyMs: result.upstream.latencyMs,
+            cost: result.meta.cost,
+            costReason: result.meta.reason,
+            metadata: result.meta.metadata,
+          },
+        };
+        await writeAudit(sharedDb, auditSinks, event, requestId);
+        await persistCostEvent(sharedDb, requestId, result.meta, result.upstream);
 
         telemetry.incrementCounter("acp.executed.count", 1);
         return;
@@ -179,7 +243,7 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
         } else {
           action = {
             type: "requireApproval",
-            handler: config.approvalsRuntime?.defaultHandlerId ?? "noop",
+            handler: "noop",
             ttlMs: 15 * 60 * 1000,
           };
         }
@@ -188,12 +252,13 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
 
       if (action.type === "deny") {
         telemetry.incrementCounter("acp.denied.count", 1);
-        await emitAudit(auditSinks, {
+        const event: AuditEvent = {
           ts: new Date().toISOString(),
           kind: "error",
           canonical,
           outcome: { status: "denied", reason: action.reason },
-        });
+        };
+        await writeAudit(sharedDb, auditSinks, event, requestId);
         return reply.status(403).send({ error: "denied", reason: action.reason });
       }
 
@@ -204,6 +269,7 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
 
         await approvalStore.create({
           id: taskId,
+          requestId,
           status: "pending",
           createdAt: new Date(),
           expiresAt: new Date(Date.now() + ttlMs),
@@ -226,12 +292,13 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
         }
 
         telemetry.incrementCounter("acp.approval_required.count", 1);
-        await emitAudit(auditSinks, {
+        const event: AuditEvent = {
           ts: new Date().toISOString(),
           kind: "approval_required",
           canonical,
           outcome: { status: "approval_required", reason: action.handler },
-        });
+        };
+        await writeAudit(sharedDb, auditSinks, event, requestId);
 
         return reply.status(202).send({
           status: "approval_required",
@@ -242,29 +309,39 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
       }
 
       const upstreamSpan = telemetry.startSpan("acp.upstream");
-      const result = await proxyUpstream(req, reply, body);
+      const result = await executeUpstreamWithToolMeta(tool, ctx, canonical, body, req, reply);
       upstreamSpan.end();
 
-      telemetry.recordLatency("acp.upstream.latency_ms", result.latencyMs);
+      telemetry.recordLatency("acp.upstream.latency_ms", result.upstream.latencyMs);
       telemetry.incrementCounter("acp.request.count", 1);
 
-      await emitAudit(auditSinks, {
+      const event: AuditEvent = {
         ts: new Date().toISOString(),
         kind: "executed",
         canonical,
-        outcome: { status: "executed", upstreamStatus: result.status, latencyMs: result.latencyMs },
-      });
+        outcome: {
+          status: "executed",
+          upstreamStatus: result.upstream.status,
+          latencyMs: result.upstream.latencyMs,
+          cost: result.meta.cost,
+          costReason: result.meta.reason,
+          metadata: result.meta.metadata,
+        },
+      };
+      await writeAudit(sharedDb, auditSinks, event, requestId);
+      await persistCostEvent(sharedDb, requestId, result.meta, result.upstream);
       return;
     } catch (error) {
       telemetry.incrementCounter("acp.error.count", 1);
       const e = error instanceof ACPError ? error : new ACPError("internal", "internal error", 500);
 
-      await emitAudit(auditSinks, {
+      const event: AuditEvent = {
         ts: new Date().toISOString(),
         kind: "error",
         canonical,
         outcome: { status: "error", reason: e.code },
-      });
+      };
+      await writeAudit(sharedDb, auditSinks, event, requestId);
 
       return reply.status(e.statusCode).send({ error: e.code, message: e.message, details: e.details });
     } finally {
@@ -283,10 +360,16 @@ export async function createGateway(input: ACPConfig | ConfigFactory, options?: 
       if (approvalStore instanceof PostgresApprovalStore) {
         await approvalStore.close();
       }
+      if (sharedDb) {
+        await sharedDb.close();
+      }
       await telemetry.shutdown();
       for (const sink of auditSinks) {
         if (sink.flush) {
           await sink.flush();
+        }
+        if (sink.close) {
+          await sink.close();
         }
       }
     },
@@ -301,3 +384,178 @@ export const __testing = {
   sameBinding,
   resolvePrincipal,
 };
+
+export async function runGateway(
+  input: ACPConfig | ConfigFactory,
+  options?: RunGatewayOptions,
+): Promise<GatewayRuntime & { signalBinding?: ShutdownBinding }> {
+  try {
+    const gateway = await createGateway(input, { cwd: options?.cwd });
+    await gateway.start();
+    if (options?.logStartup !== false) {
+      console.log(`ACP gateway is running on http://localhost:${gateway.config.gateway.port}`);
+    }
+    const signalBinding = options?.bindSignals === false
+      ? undefined
+      : bindProcessSignals(async () => gateway.stop(), { exit: options?.exitOnSignal ?? true });
+    return { ...gateway, signalBinding };
+  } catch (error) {
+    if (options?.onError) {
+      options.onError(error);
+    }
+    if (options?.exitOnError) {
+      if (!options?.onError) {
+        console.error(error);
+      }
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+export function bindProcessSignals(
+  onStop: () => Promise<void> | void,
+  options?: { exit?: boolean },
+): ShutdownBinding {
+  let stopped = false;
+  const shutdown = async () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    await onStop();
+    if (options?.exit ?? true) {
+      process.exit(0);
+    }
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  return {
+    unbind: () => {
+      process.off("SIGINT", shutdown);
+      process.off("SIGTERM", shutdown);
+    },
+  };
+}
+
+function buildDefaultAuditSinkIds(): string[] {
+  return ["stdout", "stdout-json"];
+}
+
+function ownsTask(task: ApprovalTask, principal: Principal): boolean {
+  return task.principalKey === toStablePrincipalKey(principal);
+}
+
+async function runAfterRequest(
+  tool: ToolPack,
+  input: {
+    ctx: RequestContext;
+    canonical: ReturnType<typeof buildCanonical>;
+    requestBody: Buffer;
+    upstream: { status: number; latencyMs: number; headers: Record<string, string>; body: Buffer };
+  },
+): Promise<ToolAfterRequestMeta> {
+  if (!tool.afterRequest) {
+    return {};
+  }
+  try {
+    return (await tool.afterRequest(input)) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function executeUpstreamWithToolMeta(
+  tool: ToolPack,
+  ctx: RequestContext,
+  canonical: ReturnType<typeof buildCanonical>,
+  body: Buffer,
+  req: Parameters<typeof proxyUpstream>[0],
+  reply: Parameters<typeof proxyUpstream>[1],
+): Promise<{ upstream: Awaited<ReturnType<typeof proxyUpstream>>; meta: ToolAfterRequestMeta }> {
+  const upstream = await proxyUpstream(req, reply, body);
+  const meta = await runAfterRequest(tool, {
+    ctx,
+    canonical,
+    requestBody: body,
+    upstream: {
+      status: upstream.status,
+      latencyMs: upstream.latencyMs,
+      headers: upstream.headers,
+      body: upstream.body,
+    },
+  });
+  return { upstream, meta };
+}
+
+async function persistCostEvent(
+  db: ACPDatabase | undefined,
+  requestId: string,
+  meta: ToolAfterRequestMeta,
+  upstream: { status: number; latencyMs: number },
+): Promise<void> {
+  if (!db) {
+    return;
+  }
+  if (!meta.cost && !meta.metadata) {
+    return;
+  }
+  try {
+    await db.insertCostEvent({
+      requestId,
+      ts: new Date(),
+      cost: meta.cost,
+      reason: meta.reason,
+      metadata: meta.metadata,
+      upstreamStatus: upstream.status,
+      latencyMs: upstream.latencyMs,
+    });
+  } catch {
+    return;
+  }
+}
+
+async function persistRequestRecord(
+  db: ACPDatabase | undefined,
+  requestId: string,
+  canonical: ReturnType<typeof buildCanonical>,
+): Promise<void> {
+  if (!db) {
+    return;
+  }
+  try {
+    await db.insertRequestRecord({
+      id: requestId,
+      ts: new Date(),
+      principalKey: toStablePrincipalKey(canonical.principal),
+      principal: canonical.principal,
+      channel: canonical.channel,
+      request: canonical.request,
+      target: canonical.target,
+      metadata: canonical.meta as Record<string, unknown> | undefined,
+    });
+  } catch {
+    return;
+  }
+}
+
+async function persistAuditEvent(db: ACPDatabase | undefined, event: AuditEvent, requestId: string): Promise<void> {
+  if (!db) {
+    return;
+  }
+  try {
+    await db.insertAuditEvent(event, requestId);
+  } catch {
+    return;
+  }
+}
+
+async function writeAudit(
+  db: ACPDatabase | undefined,
+  sinks: AuditSink[],
+  event: AuditEvent,
+  requestId: string,
+): Promise<void> {
+  await emitAudit(sinks, event);
+  await persistAuditEvent(db, event, requestId);
+}

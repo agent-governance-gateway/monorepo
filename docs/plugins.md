@@ -145,7 +145,21 @@ export default defineTool({
 
 ## Approval Handler Examples
 
-### Webhook handler (basic)
+### Manual handler (default no-mocks flow)
+
+```ts
+/// <reference types="@acp/config/globals" />
+
+export default defineApprovalHandler({
+  id: "manual",
+  request: async ({ taskId, decisionUrl }) => {
+    console.log(`[approval] task created: ${taskId}`);
+    console.log(`[approval] decide manually via: ${decisionUrl}`);
+  },
+});
+```
+
+### Webhook handler (optional external approver)
 
 ```ts
 /// <reference types="@acp/config/globals" />
@@ -153,7 +167,7 @@ export default defineTool({
 export default defineApprovalHandler({
   id: "webhook",
   request: async (payload) => {
-    await fetch("http://localhost:3300/approval-request", {
+    await fetch(process.env.APPROVER_WEBHOOK_URL ?? "https://approver.example.internal/approval-request", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
@@ -176,7 +190,7 @@ export default defineApprovalHandler({
     const body = JSON.stringify(payload);
     const signature = crypto.createHmac("sha256", SECRET).update(body).digest("hex");
 
-    await fetch("http://localhost:3300/approval-request", {
+    await fetch(process.env.APPROVER_WEBHOOK_URL ?? "https://approver.example.internal/approval-request", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -203,22 +217,6 @@ export default defineSink({
 });
 ```
 
-### postgres (`sinks/postgres.ts`)
-
-```ts
-/// <reference types="@acp/config/globals" />
-import { PostgresJsonbSink } from "@acp/audit";
-
-const sink = new PostgresJsonbSink({
-  id: "postgres",
-  url: "postgres://postgres:postgres@localhost:5432/postgres",
-});
-
-await sink.connect();
-
-export default defineSink(sink);
-```
-
 ## End-to-End Plugin Layout
 
 ```text
@@ -232,10 +230,9 @@ export default defineSink(sink);
 │  ├─ 02-workflow.ts
 │  └─ 99-tenant.ts
 ├─ approvals/
-│  └─ webhook.ts
+│  └─ manual.ts
 └─ sinks/
-   ├─ stdout.ts
-   └─ postgres.ts
+   └─ stdout.ts
 ```
 
 ## Tips
