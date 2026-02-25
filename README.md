@@ -1,24 +1,56 @@
 # agent-governance-gateway
 
-Agent Governance Gateway (ACP) is an HTTP control plane for agent actions. It sits in front of your real upstream APIs, resolves who is calling, normalizes what action is being requested, applies routing policy, triggers approvals when needed, and emits audit + telemetry.
+Agent Governance Gateway (ACP) is an HTTP governance layer for agent traffic.  
+It sits between your agents and real upstream APIs, then decides what should happen:
+- allow immediately,
+- deny,
+- require approval,
+- or delegate decision to OPA.
+
+It also records audit and usage/cost metadata so you can explain who did what, when, and why.
 
 ## Why this exists
 
-Teams ship agents quickly, then struggle with control:
-- risky actions are hard to gate,
-- approvals are ad-hoc,
-- audit trails are incomplete,
-- security asks for proof.
+Most teams start with direct agent-to-API calls. It works fast, but control degrades over time.
 
-ACP gives one consistent control point.
+Without ACP:
+- security rules are scattered in app code,
+- approvals are manual and inconsistent,
+- logs are hard to map to agent/workflow/run,
+- policy changes require redeploying many services.
 
-## Who should use it
+With ACP:
+- one control point for routing and approvals,
+- one principal model for identity/ownership,
+- one approval lifecycle with one-time consume semantics,
+- one audit trail and optional cost attribution.
 
-- Platform engineers running agents in production.
-- Security/compliance teams needing decision trails.
-- AI teams integrating external tools/APIs and wanting safe rollout.
+## Who this is for
 
-## 5-minute quickstart (single process, no mocks)
+- Platform engineers running AI agents in production.
+- Security/compliance teams needing enforceable controls and traceability.
+- AI product teams that need safe rollout without slowing delivery.
+
+## Before vs After ACP
+
+### Before
+
+- Agent calls external API directly.
+- Each service invents its own auth and policy logic.
+- Destructive actions are blocked inconsistently.
+- Incidents are hard to investigate due to fragmented logs.
+
+### After
+
+- Agent calls Gateway.
+- Gateway resolves principal (`tenantId`, `agentId`, `env`, `runId`, etc.).
+- Gateway normalizes request into `tool/action/resource`.
+- Gateway applies routing rules (and OPA if enabled).
+- Gateway enforces approval flow where needed.
+- Gateway proxies to upstream only when allowed.
+- Gateway emits audit + telemetry and optional cost metadata.
+
+## Quickstart (single process, no mocks)
 
 ```bash
 pnpm install
@@ -26,31 +58,36 @@ cp .env.example .env
 pnpm dev
 ```
 
-You should see:
-- `approval_required` on first request,
-- success on retry with `x-acp-approval-task-id`,
-- `already_consumed` on second retry.
+Then run the no-mocks approval flow from [docs/quickstart.md](./docs/quickstart.md):
+1. Request with `x-acp-upstream-url` -> `202 approval_required`
+2. Approve via `POST /approvals/:id/decision`
+3. Retry with `x-acp-approval-task-id` -> success
+4. Retry same task again -> `409 already_consumed`
 
-Full walkthrough: [docs/quickstart.md](./docs/quickstart.md)
+## Core concepts
 
-## Subsystems
-
-- `Principals`: who is calling (`tenantId`, `agentId`, `env`, `runId`, ...)
-- `Tools`: normalize request into `tool/action/resource/approvalBind`
-- `Routing Rules`: ordered rules (`passThrough`, `deny`, `requireApproval`, `enforcePolicy`)
-- `Approvals`: task lifecycle + one-time consume
-- `Proxying`: forwards to real upstream from `x-acp-upstream-url`
-- `Audit`: lifecycle events to sinks + DB (when postgres store is enabled)
-- `OpenTelemetry`: spans/metrics (disabled by default)
-- `OPA`: policy decision hook (disabled by default)
+- `Principals`: caller identity and attribution fields.
+- `Tools`: normalization of raw HTTP to canonical target.
+- `Routing Rules`: ordered deterministic actions.
+- `Approval Task`: pending/approved/denied/consumed lifecycle.
+- `Audit Sink`: where audit events are written.
+- `OPA`: optional external policy engine.
+- `OpenTelemetry`: optional traces/metrics.
 
 ## Core headers
 
-- `x-acp-upstream-url`
-- `x-acp-approval-task-id`
-- `x-idempotency-key` (recommended)
+- `x-acp-upstream-url` (required for execution)
+- `x-acp-approval-task-id` (required for approved retry)
+- `x-idempotency-key` (recommended on retry)
 
-## Docs
+## Security defaults
+
+- No body logging by default.
+- Sensitive headers are redacted (`authorization`, `cookie`, etc.).
+- Approval binding is based on principal + method/host/path + optional `approvalBind`.
+- Approval tasks are consumed only after successful upstream response.
+
+## Documentation
 
 - [Docs Home](./docs/index.md)
 - [Why ACP](./docs/why.md)
